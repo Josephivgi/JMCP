@@ -3,7 +3,7 @@
 
 // JMCP Subagents: an MCP server (stdio) that lets any coding agent start
 // subagents from other providers: Claude Code, Codex, Factory Droid, Devin,
-// Cursor, OpenCode, Gemini, Qwen, Grok, Copilot and more. Ported from the
+// Cursor, OpenCode, Gemini, Qwen, Grok and more. Ported from the
 // JAgents Subagents plugin, but it needs no app: the agent that runs this
 // server is the parent, and its subagents run as hidden child processes of
 // this server.
@@ -410,7 +410,7 @@ async function spawn(args) {
 
 // ---- Tools ----
 
-const PROVIDER_LIST = "claude, codex, droid, devin, cursor, opencode, gemini, qwen, grok, copilot, kilo, goose, cline, kimi";
+const PROVIDER_LIST = "claude, codex, droid, devin, cursor, opencode, gemini, qwen, grok, kilo, goose, cline, kimi";
 
 const TOOLS = [
   {

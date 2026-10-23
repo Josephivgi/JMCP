@@ -4,7 +4,7 @@ JMCP shows the MCP servers of every coding agent on your computer in one
 place and installs JMCP servers into all of them at once.
 
 Agents: Claude Code, Codex, Factory Droid, OpenCode, Devin, Cursor, Gemini
-CLI, Qwen Code, Grok, GitHub Copilot CLI, Windsurf and VS Code.
+CLI, Qwen Code and Grok.
 
 ## The app
 

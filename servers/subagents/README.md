@@ -17,7 +17,7 @@ Devin, OpenCode can run Grok, and so on.
 | `stop` | Stop a turn, close a session, or remove a subagent |
 
 Providers: Claude Code (`claude`), Codex (`codex`), Factory Droid (`droid`),
-Devin, Cursor, OpenCode, Gemini CLI, Qwen Code, Grok, GitHub Copilot CLI,
+Devin, Cursor, OpenCode, Gemini CLI, Qwen Code, Grok,
 Kilo, goose, Cline, Kimi. Each must be installed and signed in on its own.
 
 ## How it works

@@ -1,6 +1,6 @@
 {
   "name": "jmcp-subagents",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server that lets any coding agent start subagents from other providers: Claude Code, Codex, Factory Droid, Devin, Cursor, OpenCode, Gemini, Qwen, Grok and more. The first official JMCP server.",
   "license": "MIT",
   "author": "Josephivgi",

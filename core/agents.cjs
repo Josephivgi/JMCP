@@ -337,33 +337,6 @@ const AGENTS = [
     file: (d) => path.join(d.home, ".grok", "config.toml"),
     toEntry: (def) => (def.url ? { url: def.url, enabled: true } : { command: def.command, args: def.args || [], enabled: true, env: def.env || {} }),
   }),
-  jsonAgent({
-    id: "copilot",
-    name: "GitHub Copilot CLI",
-    cli: ["copilot"],
-    configDir: (d) => path.join(d.home, ".copilot"),
-    file: (d) => path.join(d.home, ".copilot", "mcp-config.json"),
-    key: "mcpServers",
-    toEntry: (def) => stdioOrUrl(def, (x) => ({ type: "local", command: x.command, args: x.args || [], env: x.env || {}, tools: ["*"] }), (x) => ({ type: "http", url: x.url, tools: ["*"] })),
-  }),
-  jsonAgent({
-    id: "windsurf",
-    name: "Windsurf",
-    cli: ["windsurf"],
-    configDir: (d) => path.join(d.home, ".codeium", "windsurf"),
-    file: (d) => path.join(d.home, ".codeium", "windsurf", "mcp_config.json"),
-    key: "mcpServers",
-    toEntry: (def) => stdioOrUrl(def, (x) => ({ command: x.command, args: x.args || [], env: x.env || {} }), (x) => ({ serverUrl: x.url })),
-  }),
-  jsonAgent({
-    id: "vscode",
-    name: "VS Code",
-    cli: ["code"],
-    configDir: (d) => path.join(d.win ? d.appData : d.xdg, "Code", "User"),
-    file: (d) => path.join(d.win ? d.appData : d.xdg, "Code", "User", "mcp.json"),
-    key: "servers",
-    toEntry: (def) => stdioOrUrl(def, (x) => ({ type: "stdio", command: x.command, args: x.args || [], env: x.env || {} }), (x) => ({ type: "http", url: x.url })),
-  }),
 ];
 
 function findCli(names) {

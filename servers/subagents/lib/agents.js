@@ -145,7 +145,6 @@ const AGENTS = [
   { id: "gemini", aliases: ["gemini-cli"], name: "Gemini CLI", resolve: () => programSpec("gemini", ["--acp"]), install: "npm install -g @google/gemini-cli" },
   { id: "qwen", aliases: ["qwen-code"], name: "Qwen Code", resolve: () => programSpec("qwen", ["--acp"]), install: "npm install -g @qwen-code/qwen-code" },
   { id: "grok", aliases: ["grok-build"], name: "Grok", resolve: () => programSpec("grok", ["agent", "stdio"], [path.join(HOME, ".grok", "bin")]), install: "Install the Grok CLI." },
-  { id: "copilot", aliases: ["github-copilot"], name: "GitHub Copilot CLI", resolve: () => programSpec("copilot", ["--acp", "--stdio"]), install: "npm install -g @github/copilot" },
   { id: "kilo", name: "Kilo", resolve: () => programSpec("kilo", ["acp"]), install: "npm install -g @kilocode/cli" },
   { id: "goose", name: "goose", resolve: () => programSpec("goose", ["acp"]), install: "Install goose from github.com/block/goose." },
   { id: "cline", name: "Cline", resolve: () => programSpec("cline", ["--acp"]), install: "npm install -g cline" },
