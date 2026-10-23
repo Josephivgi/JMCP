@@ -125,8 +125,15 @@ function catalogPage() {
           h("div", { class: "server-title" }, h("h2", { text: c.title }), h("code", { text: c.name }), c.official ? h("span", { class: "tag", text: "Official" }) : null),
           h("p", { class: "server-desc", text: c.description }),
         ),
-        h("span", { class: "state" + (installed.size ? " ok" : ""), text: installed.size ? "In " + installed.size + " of " + st.agents.length + " agents" : "Not installed" }),
+        h(
+          "div",
+          { class: "server-side" },
+          h("span", { class: "state" + (installed.size ? " ok" : ""), text: installed.size ? "In " + installed.size + " of " + st.agents.length + " agents" : "Not installed" }),
+          h("span", { class: "state" + (c.updateAvailable ? " warn" : ""), text: c.updateAvailable ? "Update: " + c.installed + " to " + c.latest : c.installed ? "Version " + c.installed : "Version " + c.latest }),
+          c.updateAvailable ? h("button", { class: "btn small", disabled: busy, onclick: () => runUpdate(c.id) }, "Update") : null,
+        ),
       ),
+      updateNote(c),
       h("div", { class: "tools" }, c.tools.map((t) => h("code", { text: t }))),
       h("div", { class: "section-head" }, h("h2", { text: "Install in" }), h("span", { class: "note", text: "Found agents are picked. Each config file is backed up before the first change." })),
       targets,
@@ -168,6 +175,31 @@ async function runInstall(id, ids) {
     lastLog = { server: r.server, kind: "install", results: r.results };
   } catch (e) {
     lastLog = { server: id, kind: "install", results: [{ ok: false, agent: "jmcp", error: e.message }] };
+  }
+  busy = false;
+  render();
+}
+
+// Updates the app made when it started, and any made from the Update button.
+let updates = [];
+
+function updateNote(c) {
+  const u = updates.find((x) => x.server === c.name);
+  if (!u) return null;
+  if (!u.ok) return h("div", { class: "error-box", text: "Update failed: " + u.error });
+  return h("p", { class: "server-desc", text: "Updated from " + u.from + " to " + u.to + (u.atStart ? " when JMCP started" : "") + ". Agents load the new version the next time they start it." });
+}
+
+async function runUpdate(id) {
+  busy = true;
+  render();
+  try {
+    const r = await api.update(id);
+    st = r.state;
+    updates = updates.filter((x) => x.server !== r.server).concat([Object.assign({ ok: true }, r)]);
+  } catch (e) {
+    const c = st.catalog.find((x) => x.id === id);
+    updates = updates.filter((x) => x.server !== c.name).concat([{ ok: false, server: c.name, error: e.message }]);
   }
   busy = false;
   render();
@@ -287,25 +319,9 @@ function statusClass(s) {
 
 function activityPage() {
   if (!act) {
-    api.activity().then((r) => ((act = r), render())).catch((e) => ((act = { error: e.message, sessions: [], subagents: [], workflows: [] }), render()));
+    api.activity().then((r) => ((act = r), render())).catch((e) => ((act = { error: e.message, sessions: [], subagents: [] }), render()));
     return h("div", { class: "page" }, head("Activity", "Loading…"));
   }
-  const wf = act.workflows.length
-    ? h(
-        "div",
-        { class: "panel act" },
-        act.workflows.map((w) =>
-          h(
-            "div",
-            { class: "act-row static" },
-            h("span", { class: "state " + statusClass(w.status), text: w.status }),
-            h("span", { class: "who-col", text: w.id }),
-            h("span", { class: "steps" }, w.steps.map((s) => h("span", { class: "tag", title: s.reply || s.error || "", text: s.id + ": " + s.provider + " " + s.status }))),
-            h("span", { class: "when", text: ago(w.updated_at) }),
-          ),
-        ),
-      )
-    : null;
   const subs = act.subagents.length
     ? h(
         "div",
@@ -337,9 +353,8 @@ function activityPage() {
   return h(
     "div",
     { class: "page" },
-    head("Activity", "Subagents and workflows started through jmcp-subagents, newest first.", [h("button", { class: "btn", onclick: () => ((act = null), render()) }, "Refresh")]),
+    head("Activity", "Subagents started through jmcp-subagents, newest first.", [h("button", { class: "btn", onclick: () => ((act = null), render()) }, "Refresh")]),
     act.error ? h("div", { class: "error-box", text: act.error }) : null,
-    wf ? h("section", { class: "section" }, h("h2", { text: "Workflows" }), wf) : null,
     h("section", { class: "section" }, h("h2", { text: "Subagents" }), subs),
   );
 }
@@ -357,6 +372,14 @@ async function load() {
   try {
     st = await api.state();
     render();
+    // Updates made at start can take a while (the server is copied); show
+    // them when they land.
+    const done = await api.startupUpdates();
+    if (done.length) {
+      updates = done.map((u) => Object.assign({ atStart: true }, u));
+      st = await api.state();
+      render();
+    }
   } catch (e) {
     $main.replaceChildren(h("div", { class: "page" }, head("JMCP could not read your agents", ""), h("div", { class: "error-box", text: e.message })));
   }

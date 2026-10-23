@@ -9,9 +9,7 @@ Devin, OpenCode can run Grok, and so on.
 | Tool | What it does |
 | --- | --- |
 | `providers` | Agents you can start and whether each is installed |
-| `spawn` | Start a subagent on a task; waits for its reply by default |
-| `workflow` | Run several subagents: parallel steps, and steps that wait on others (`after`), with `{{id}}` to pass a reply on |
-| `workflow_status` | Steps, status and replies of a workflow |
+| `spawn` | Start a subagent on a task; waits for its reply by default. With `wait: false` you can start several at once and `wait` on each |
 | `list` | Your subagents and their latest replies |
 | `wait` | Wait for a subagent to finish its turn |
 | `send` | Send a follow-up message |
@@ -37,6 +35,18 @@ kept in `~/.jmcp/subagents.db`; the JMCP app shows them under Activity.
   `deny` denies everything that asks.
 - `JMCP_MAX_SUBAGENTS`: running subagents per parent (default 6).
 - `JMCP_HOME`: where the database lives (default `~/.jmcp`).
+
+## Updates
+
+The JMCP app keeps a copy of this server in `~/.jmcp/servers/subagents` and
+points every agent at it. When JMCP has a newer version than that copy, the
+app updates it when it starts (JMCP servers also shows an Update button),
+and rewrites the entry in each agent that has it. Agents load the new
+version the next time they start the server. From a terminal:
+
+```
+node cli/jmcp.cjs update
+```
 
 ## Install
 

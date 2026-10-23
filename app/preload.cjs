@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld("jmcp", {
   state: () => call("state"),
   install: (id, agentIds) => call("install", id, agentIds),
   uninstall: (id, agentIds) => call("uninstall", id, agentIds),
+  update: (id) => call("update", id),
+  startupUpdates: () => call("startup-updates"),
   probe: (agentId, name) => call("probe", agentId, name),
   activity: () => call("activity"),
   reveal: (file) => call("reveal", file),

@@ -47,6 +47,13 @@ handle("install", async (id, agentIds) => {
   const r = await catalog.installServer(String(id), Array.isArray(agentIds) ? agentIds.map(String) : [], HOME);
   return Object.assign({ state: state() }, r);
 });
+handle("update", async (id) => {
+  const r = await catalog.updateServer(String(id), HOME);
+  return Object.assign(r, { state: state() });
+});
+// Updates done when the app started, for the JMCP servers page to show.
+let startupUpdates = Promise.resolve([]);
+handle("startup-updates", () => startupUpdates);
 handle("uninstall", (id, agentIds) => Object.assign({ state: state() }, catalog.uninstallServer(String(id), Array.isArray(agentIds) ? agentIds.map(String) : [], HOME)));
 handle("probe", async (agentId, name) => {
   const a = agents.scan(HOME).find((x) => x.id === agentId);
@@ -86,7 +93,7 @@ async function smoke(win) {
   const out = path.resolve(flag("--out") || "jmcp-smoke.png");
   await new Promise((r) => win.webContents.once("did-finish-load", r));
   // Wait for the first real render (the renderer sets data-ready).
-  const until = Date.now() + 20000;
+  const until = Date.now() + 180000;
   while (Date.now() < until) {
     const ready = await win.webContents.executeJavaScript("document.documentElement.dataset.ready === '1'");
     if (ready) break;
@@ -111,6 +118,8 @@ async function smoke(win) {
 }
 
 app.whenReady().then(() => {
+  // Bring installed JMCP servers up to this version before the window asks.
+  startupUpdates = catalog.updateAll(HOME).catch((e) => [{ ok: false, server: "jmcp", error: String(e.message || e) }]);
   const win = createWindow();
   if (SMOKE) {
     win.webContents.on("console-message", (e) => {

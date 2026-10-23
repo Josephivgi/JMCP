@@ -99,3 +99,34 @@ test("OpenCode 2 nested servers are read and written in place", () => {
   assert.ok(require("jsonc-parser").parse(fs.readFileSync(file, "utf8")).mcp.servers.demo);
   assert.strictEqual(agents.uninstall("opencode", "demo", home).removed, true);
 });
+
+test("update replaces an older copy and rewrites the agents that have it", async () => {
+  const home = scratch();
+  await catalog.installServer("subagents", ["codex", "cursor"], home);
+  const pkg = path.join(home, ".jmcp", "servers", "subagents", "package.json");
+  const latest = JSON.parse(fs.readFileSync(pkg, "utf8")).version;
+  // Pretend an older version is installed, and its Codex entry is stale.
+  fs.writeFileSync(pkg, JSON.stringify({ version: "0.0.1" }));
+  agents.install("codex", "jmcp-subagents", { command: "old-node", args: ["x"] }, home);
+  let st = catalog.catalogState(home)[0];
+  assert.strictEqual(st.updateAvailable, true);
+  assert.strictEqual(st.installed, "0.0.1");
+  const r = await catalog.updateAll(home);
+  assert.strictEqual(r.length, 1);
+  assert.strictEqual(r[0].from, "0.0.1");
+  assert.strictEqual(r[0].to, latest);
+  assert.deepStrictEqual(r[0].results.map((x) => x.agent).sort(), ["codex", "cursor"]);
+  st = catalog.catalogState(home)[0];
+  assert.strictEqual(st.updateAvailable, false);
+  const codex = agents.scan(home).find((a) => a.id === "codex").servers.find((s) => s.name === "jmcp-subagents");
+  assert.notStrictEqual(codex.command, "old-node");
+  assert.ok(fs.existsSync(path.join(home, ".jmcp", "servers", "subagents", "server.cjs")));
+  assert.ok(!fs.existsSync(path.join(home, ".jmcp", "servers", "subagents.old")));
+  assert.deepStrictEqual(await catalog.updateAll(home), []);
+});
+
+test("versions compare by number", () => {
+  assert.strictEqual(catalog.compareVersions("0.10.0", "0.9.9"), 1);
+  assert.strictEqual(catalog.compareVersions("0.2.0", "0.2.0"), 0);
+  assert.strictEqual(catalog.compareVersions("1.0.0", "1.0.1"), -1);
+});

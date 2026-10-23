@@ -50,11 +50,11 @@ function openDb() {
   fs.mkdirSync(JMCP_HOME, { recursive: true });
   const { DatabaseSync } = require("node:sqlite");
   db = new DatabaseSync(path.join(JMCP_HOME, "subagents.db"));
+  // The workflow column is left from 0.1 (which had workflows) and stays empty.
   db.exec(
     "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;" +
       "CREATE TABLE IF NOT EXISTS subagents (session TEXT NOT NULL, handle TEXT NOT NULL, parent TEXT, provider TEXT, provider_name TEXT, task TEXT, cwd TEXT, status TEXT, error TEXT, model TEXT, effort TEXT, workflow TEXT, created_at INTEGER, updated_at INTEGER, transcript TEXT, PRIMARY KEY (session, handle));" +
-      "CREATE TABLE IF NOT EXISTS sessions (session TEXT PRIMARY KEY, parent TEXT, pid INTEGER, cwd TEXT, started_at INTEGER, ended_at INTEGER);" +
-      "CREATE TABLE IF NOT EXISTS workflows (session TEXT NOT NULL, id TEXT NOT NULL, name TEXT, status TEXT, steps TEXT, created_at INTEGER, updated_at INTEGER, PRIMARY KEY (session, id));",
+      "CREATE TABLE IF NOT EXISTS sessions (session TEXT PRIMARY KEY, parent TEXT, pid INTEGER, cwd TEXT, started_at INTEGER, ended_at INTEGER);",
   );
   q = {
     upsert: db.prepare(
@@ -65,9 +65,6 @@ function openDb() {
     session: db.prepare("INSERT INTO sessions (session, parent, pid, cwd, started_at) VALUES (?,?,?,?,?) ON CONFLICT(session) DO UPDATE SET parent=excluded.parent"),
     endSession: db.prepare("UPDATE sessions SET ended_at = ? WHERE session = ?"),
     endSubs: db.prepare("UPDATE subagents SET status = 'stopped' WHERE session = ? AND status IN ('busy','starting','ready','idle')"),
-    workflow: db.prepare(
-      "INSERT INTO workflows (session, id, name, status, steps, created_at, updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(session, id) DO UPDATE SET status=excluded.status, steps=excluded.steps, updated_at=excluded.updated_at",
-    ),
   };
 }
 
@@ -94,7 +91,7 @@ function save(s, now) {
     saveTimers.delete(s.handle);
     if (!subs.has(s.handle)) return;
     dbRun(() =>
-      q.upsert.run(SESSION, s.handle, parentName, s.provider, s.providerName, s.task, s.cwd, s.status, s.error, s.using.model || s.want.model || "", s.using.effort || s.want.effort || "", s.workflow || "", s.createdAt, s.updatedAt, JSON.stringify(s.rows.slice(-ROWS_MAX))),
+      q.upsert.run(SESSION, s.handle, parentName, s.provider, s.providerName, s.task, s.cwd, s.status, s.error, s.using.model || s.want.model || "", s.using.effort || s.want.effort || "", "", s.createdAt, s.updatedAt, JSON.stringify(s.rows.slice(-ROWS_MAX))),
     );
   };
   if (now) run();
@@ -361,7 +358,7 @@ function view(s, replyMax) {
     handle: s.handle, provider: s.provider, providerName: s.providerName, status: s.status, error: s.error || undefined,
     task: s.task.slice(0, 600), cwd: s.cwd, queued: s.queue.length || undefined,
     model: s.using.model || s.want.model || undefined, effort: s.using.effort || s.want.effort || undefined,
-    workflow: s.workflow || undefined, reply: lastReply(s).slice(0, replyMax || 600),
+    reply: lastReply(s).slice(0, replyMax || 600),
   };
 }
 
@@ -379,7 +376,7 @@ function nextHandle(provider) {
   return short + "-" + n;
 }
 
-function create(args, extra) {
+function create(args) {
   const agents = require("./lib/agents");
   const task = String(args.task || "").trim();
   if (!task) throw new Error("task is empty.");
@@ -395,7 +392,7 @@ function create(args, extra) {
   const s = {
     handle: nextHandle(a.id), provider: a.id, providerName: a.name, task, cwd, status: "idle", error: "",
     want: { model: String(args.model || "").trim(), effort: String(args.effort || "").trim().toLowerCase() }, using: {},
-    workflow: (extra && extra.workflow) || "", createdAt: Date.now(), updatedAt: Date.now(), rows: [], client: null, sessionId: "",
+    createdAt: Date.now(), updatedAt: Date.now(), rows: [], client: null, sessionId: "",
     waiters: new Set(), queue: [], introduced: false, sessionUsed: false,
   };
   subs.set(s.handle, s);
@@ -409,114 +406,6 @@ async function spawn(args) {
   if (args.wait === false) return Object.assign(view(s), { note: "Call wait with agent " + s.handle + " for its reply." });
   const why = await waitFor(s, clampWait(args.timeout_seconds));
   return Object.assign(view(s, TEXT_MAX), why === "timeout" ? { hint: "Still working. Call wait with agent " + s.handle + "." } : {});
-}
-
-// ---- Workflows ----
-//
-// A workflow is a set of steps, each a subagent task. A step runs once every
-// step in its after list is done; steps with no unmet dependencies run at the
-// same time. {{id}} in a task is replaced with that step's reply.
-
-const workflows = new Map();
-
-function saveWorkflow(w) {
-  w.updatedAt = Date.now();
-  dbRun(() => q.workflow.run(SESSION, w.id, w.name, w.status, JSON.stringify(w.steps.map(stepView)), w.createdAt, w.updatedAt));
-}
-
-function stepView(st) {
-  const s = st.handle ? subs.get(st.handle) : null;
-  return { id: st.id, provider: st.provider, after: st.after, status: st.status, handle: st.handle || undefined, error: st.error || undefined, reply: st.reply ? st.reply.slice(0, TEXT_MAX) : s ? lastReply(s).slice(0, TEXT_MAX) : undefined };
-}
-
-function workflowView(w) {
-  return { workflow: w.id, name: w.name, status: w.status, steps: w.steps.map(stepView) };
-}
-
-function startWorkflow(args) {
-  const raw = Array.isArray(args.steps) ? args.steps : [];
-  if (!raw.length) throw new Error("steps is empty.");
-  const ids = new Set();
-  const steps = raw.map((r, i) => {
-    const id = String((r && r.id) || "step" + (i + 1)).trim();
-    if (ids.has(id)) throw new Error("Two steps are named " + id + ".");
-    ids.add(id);
-    return { id, provider: String(r.provider || ""), task: String(r.task || ""), model: r.model, effort: r.effort, cwd: r.cwd, after: (Array.isArray(r.after) ? r.after : []).map(String), status: "waiting", handle: "", reply: "", error: "" };
-  });
-  for (const st of steps) for (const d of st.after) if (!ids.has(d)) throw new Error("Step " + st.id + " waits on unknown step " + d + ".");
-  // Reject cycles before anything starts.
-  const seen = new Map();
-  const visit = (id) => {
-    if (seen.get(id) === 1) throw new Error("Steps wait on each other in a loop at " + id + ".");
-    if (seen.get(id) === 2) return;
-    seen.set(id, 1);
-    for (const d of steps.find((x) => x.id === id).after) visit(d);
-    seen.set(id, 2);
-  };
-  for (const st of steps) visit(st.id);
-  let n = workflows.size + 1;
-  while (workflows.has("wf-" + n)) n++;
-  const w = { id: "wf-" + n, name: String(args.name || "").trim() || "workflow " + n, cwd: args.cwd, status: "running", steps, waiters: new Set(), createdAt: Date.now() };
-  workflows.set(w.id, w);
-  saveWorkflow(w);
-  pump(w);
-  return w;
-}
-
-function pump(w) {
-  if (w.status !== "running") return;
-  const byId = new Map(w.steps.map((s) => [s.id, s]));
-  for (const st of w.steps) {
-    if (st.status !== "waiting") continue;
-    const deps = st.after.map((d) => byId.get(d));
-    if (deps.some((d) => d.status === "failed" || d.status === "skipped")) {
-      st.status = "skipped";
-      st.error = "A step it waits on did not finish.";
-      continue;
-    }
-    if (!deps.every((d) => d.status === "done")) continue;
-    const task = st.task.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (m, id) => (byId.has(id) ? byId.get(id).reply || "(no reply)" : m));
-    let s;
-    try {
-      s = create({ provider: st.provider, task, model: st.model, effort: st.effort, cwd: st.cwd || w.cwd }, { workflow: w.id });
-    } catch (e) {
-      st.status = "failed";
-      st.error = errText(e);
-      continue;
-    }
-    st.handle = s.handle;
-    st.status = "running";
-    deliver(s, s.task);
-    waitFor(s, WAIT_MAX_S * 1000 * 4).then(() => {
-      st.reply = lastReply(s);
-      st.status = s.status === "error" || (!st.reply && s.error) ? "failed" : "done";
-      if (st.status === "failed") st.error = s.error || "No reply.";
-      pump(w);
-    });
-  }
-  const left = w.steps.some((s) => s.status === "waiting" || s.status === "running");
-  if (!left) w.status = w.steps.every((s) => s.status === "done") ? "done" : "failed";
-  saveWorkflow(w);
-  if (!left) for (const fn of [...w.waiters]) fn();
-  // A step that just became skipped or failed can unblock nothing, but it can
-  // make others skippable: run again until stable.
-  if (left && w.steps.some((s) => s.status === "waiting" && s.after.some((d) => ["failed", "skipped"].includes(byId.get(d).status)))) pump(w);
-}
-
-function waitWorkflow(w, ms) {
-  if (w.status !== "running") return Promise.resolve("done");
-  return new Promise((resolve) => {
-    const fn = () => {
-      clearTimeout(t);
-      w.waiters.delete(fn);
-      resolve("done");
-    };
-    const t = setTimeout(() => {
-      w.waiters.delete(fn);
-      resolve("timeout");
-    }, ms);
-    w.waiters.add(fn);
-  });
 }
 
 // ---- Tools ----
@@ -550,58 +439,10 @@ const TOOLS = [
     run: spawn,
   },
   {
-    name: "workflow",
-    description:
-      "Run several subagents as one workflow. Each step is {id, provider, task, after?}. Steps with nothing in after start at once (in parallel); a step starts when every step in its after list is done. Write {{id}} in a task to insert that step's reply, e.g. a review step after two build steps. With wait (default true) this returns when all steps finish or after timeout_seconds; then call workflow_status.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        cwd: { type: "string", description: "Working folder for steps that do not set their own" },
-        steps: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              id: { type: "string" },
-              provider: { type: "string" },
-              task: { type: "string" },
-              after: { type: "array", items: { type: "string" } },
-              model: { type: "string" },
-              effort: { type: "string" },
-              cwd: { type: "string" },
-            },
-            required: ["provider", "task"],
-          },
-        },
-        wait: { type: "boolean", description: "Wait for it to finish (default true)" },
-        timeout_seconds: { type: "number", description: "How long to wait (default 50, max 1800)" },
-      },
-      required: ["steps"],
-    },
-    run: async (args) => {
-      const w = startWorkflow(args);
-      if (args.wait === false) return Object.assign(workflowView(w), { note: "Call workflow_status with workflow " + w.id + "." });
-      const why = await waitWorkflow(w, clampWait(args.timeout_seconds));
-      return Object.assign(workflowView(w), why === "timeout" ? { hint: "Still running. Call workflow_status with workflow " + w.id + "." } : {});
-    },
-  },
-  {
-    name: "workflow_status",
-    description: "A workflow's steps, their status and replies. wait_seconds waits for it to finish first.",
-    inputSchema: { type: "object", properties: { workflow: { type: "string" }, wait_seconds: { type: "number", description: "Default 0, max 1800" } }, required: ["workflow"] },
-    run: async (args) => {
-      const w = workflows.get(String(args.workflow || "").trim());
-      if (!w) throw new Error("No workflow " + args.workflow + ".");
-      if (Number(args.wait_seconds) > 0) await waitWorkflow(w, clampWait(args.wait_seconds));
-      return workflowView(w);
-    },
-  },
-  {
     name: "list",
     description: "Your subagents with their status and the start of their latest reply.",
     inputSchema: { type: "object", properties: {} },
-    run: () => ({ you: parentName, subagents: [...subs.values()].map((s) => view(s)), workflows: [...workflows.values()].map((w) => ({ workflow: w.id, name: w.name, status: w.status })) }),
+    run: () => ({ you: parentName, subagents: [...subs.values()].map((s) => view(s)) }),
   },
   {
     name: "wait",
@@ -666,7 +507,7 @@ const TOOLS = [
 
 const INSTRUCTIONS = IS_SUBAGENT
   ? "You are running as a JMCP subagent, so this server offers no tools: subagents cannot start subagents."
-  : "JMCP Subagents lets you start other coding agents (" + PROVIDER_LIST + ") as your own subagents. Use providers to see what is installed, spawn to start one on a task, workflow to run several at once or in order, and wait/send/read/stop to work with them.";
+  : "JMCP Subagents lets you start other coding agents (" + PROVIDER_LIST + ") as your own subagents. Use providers to see what is installed, spawn to start one on a task (start several with wait: false to run them at once), and wait/send/read/stop to work with them.";
 
 // ---- MCP over stdio ----
 
@@ -728,7 +569,6 @@ function shutdown() {
     if (["busy", "starting", "ready", "idle"].includes(s.status)) s.status = "stopped";
     save(s, true);
   }
-  for (const w of workflows.values()) if (w.status === "running") (w.status = "stopped"), saveWorkflow(w);
   dbRun(() => {
     q.endSubs.run(SESSION);
     q.endSession.run(Date.now(), SESSION);
@@ -761,4 +601,4 @@ if (require.main === module) {
   process.on("SIGINT", shutdown);
 }
 
-module.exports = { TOOLS, handle, startWorkflow, workflowView };
+module.exports = { TOOLS, handle };

@@ -6,6 +6,7 @@
 //   jmcp catalog                      JMCP servers and where they are installed
 //   jmcp install <server> [agents..]  install into the given agents (default: all found)
 //   jmcp uninstall <server> [agents..]
+//   jmcp update [server]              update installed JMCP servers to this version
 //   jmcp probe <agent> <server>       start a configured server and list its tools
 // --home <dir> works on a scratch home folder instead of yours.
 
@@ -46,6 +47,10 @@ async function main() {
     const r = cmd === "install" ? await catalog.installServer(rest[0], rest.slice(1), home || undefined) : catalog.uninstallServer(rest[0], rest.slice(1), home || undefined);
     return out(r, () => r.results.map((x) => (x.ok ? (x.removed === false ? "  -  " : "  ✓  ") : "  ✗  ") + x.agent + "  " + (x.ok ? x.file : x.error)).join("\n"));
   }
+  if (cmd === "update") {
+    const r = rest[0] ? [await catalog.updateServer(rest[0], home || undefined)] : await catalog.updateAll(home || undefined);
+    return out(r, () => (r.length ? r.map((x) => (x.ok === false ? "  ✗  " + x.server + "  " + x.error : "  ✓  " + x.server + "  " + x.from + " → " + x.to + "  (" + x.results.length + " agents)")).join("\n") : "  Everything is up to date."));
+  }
   if (cmd === "probe") {
     const a = agents.scan(home || undefined).find((x) => x.id === rest[0]);
     const s = a && a.servers.find((x) => x.name === rest[1]);
@@ -54,7 +59,7 @@ async function main() {
     const r = await probe(s);
     return out(r, () => (r.ok ? r.tools.map((t) => "  " + t.name).join("\n") || "  (no tools)" : "  ✗ " + r.error));
   }
-  console.log("Usage: jmcp list | catalog | install <server> [agents..] | uninstall <server> [agents..] | probe <agent> <server>  [--home dir] [--json]");
+  console.log("Usage: jmcp list | catalog | install <server> [agents..] | uninstall <server> [agents..] | update [server] | probe <agent> <server>  [--home dir] [--json]");
 }
 
 main().catch((e) => {

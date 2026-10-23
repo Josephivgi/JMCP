@@ -12,7 +12,11 @@ CLI, Qwen Code, Grok, GitHub Copilot CLI, Windsurf and VS Code.
 - **Agents**: one page per agent with the servers in its own config file,
   their command or URL, on or off, and a Check tools button that starts the
   server hidden and lists its tools.
-- **Activity**: subagents and workflows run through jmcp-subagents.
+- **Activity**: subagents run through jmcp-subagents.
+
+When JMCP starts it updates any JMCP server it installed whose copy in
+`~/.jmcp/servers` is older than the app's version. `node cli/jmcp.cjs update`
+does the same from a terminal.
 
 JMCP edits each agent's own config file in place. JSON files keep their
 comments and formatting; TOML files only get that server's tables replaced.
@@ -31,7 +35,6 @@ npm start                 # the app
 node cli/jmcp.cjs list    # every agent and its servers
 npm test                  # unit tests (scratch folders only)
 node test/live/spawn.cjs droid      # a real subagent
-node test/live/workflow.cjs         # a real three-step workflow
 ```
 
 `--home <folder>` (app and CLI) works on a scratch home instead of yours.

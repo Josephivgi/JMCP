@@ -9,7 +9,7 @@ const { jmcpHome } = require("./catalog.cjs");
 
 function activity(home, limit) {
   const file = path.join(jmcpHome(home), "subagents.db");
-  if (!fs.existsSync(file)) return { sessions: [], subagents: [], workflows: [] };
+  if (!fs.existsSync(file)) return { sessions: [], subagents: [] };
   const { DatabaseSync } = require("node:sqlite");
   const db = new DatabaseSync(file, { readOnly: true });
   try {
@@ -18,7 +18,7 @@ function activity(home, limit) {
     const has = (t) => Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(t));
     const sessions = has("sessions") ? db.prepare("SELECT * FROM sessions ORDER BY started_at DESC LIMIT ?").all(n) : [];
     const subagents = has("subagents")
-      ? db.prepare("SELECT session, handle, parent, provider, provider_name, task, cwd, status, error, model, effort, workflow, created_at, updated_at, transcript FROM subagents ORDER BY updated_at DESC LIMIT ?").all(n).map((r) => {
+      ? db.prepare("SELECT session, handle, parent, provider, provider_name, task, cwd, status, error, model, effort, created_at, updated_at, transcript FROM subagents ORDER BY updated_at DESC LIMIT ?").all(n).map((r) => {
           let rows = [];
           try {
             rows = JSON.parse(r.transcript || "[]");
@@ -30,18 +30,7 @@ function activity(home, limit) {
           return Object.assign(rest, { reply: reply ? String(reply.text).slice(0, 2000) : "", tools: rows.filter((x) => x.role === "tool").length, rows: rows.slice(-60).map((x) => ({ role: x.role, text: String(x.text).slice(0, 2000), status: x.status })) });
         })
       : [];
-    const workflows = has("workflows")
-      ? db.prepare("SELECT * FROM workflows ORDER BY updated_at DESC LIMIT ?").all(n).map((w) => {
-          let steps = [];
-          try {
-            steps = JSON.parse(w.steps || "[]");
-          } catch {
-            steps = [];
-          }
-          return Object.assign({}, w, { steps });
-        })
-      : [];
-    return { sessions, subagents, workflows };
+    return { sessions, subagents };
   } finally {
     db.close();
   }
