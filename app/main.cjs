@@ -43,8 +43,9 @@ function handle(name, fn) {
 }
 
 handle("state", () => state());
-handle("install", async (id, agentIds) => {
-  const r = await catalog.installServer(String(id), Array.isArray(agentIds) ? agentIds.map(String) : [], HOME);
+// force: the user pressed Continue on the "already in" warning.
+handle("install", async (id, agentIds, force) => {
+  const r = await catalog.installServer(String(id), Array.isArray(agentIds) ? agentIds.map(String) : [], HOME, { force: force === true });
   return Object.assign({ state: state() }, r);
 });
 handle("update", async (id) => {
@@ -100,9 +101,10 @@ async function smoke(win) {
     await new Promise((r) => setTimeout(r, 200));
   }
   await new Promise((r) => setTimeout(r, 600));
-  // --smoke-click "Button text": press that button and wait for the page to settle.
-  const click = flag("--smoke-click");
-  if (click) {
+  // --smoke-click "Button text" (repeatable): press those buttons in order,
+  // letting the page settle after each.
+  const clicks = argv.flatMap((x, i) => (x === "--smoke-click" && argv[i + 1] ? [argv[i + 1]] : []));
+  for (const click of clicks) {
     const found = await win.webContents.executeJavaScript("(() => { const b = [...document.querySelectorAll('main button')].find((x) => x.textContent.trim().startsWith(" + JSON.stringify(click) + ")); if (b) b.click(); return Boolean(b); })()");
     if (!found) process.stderr.write("smoke: no button " + click + "\n");
     const end = Date.now() + 120000;

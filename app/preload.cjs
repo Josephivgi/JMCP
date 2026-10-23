@@ -10,7 +10,7 @@ const call = async (name, ...args) => {
 
 contextBridge.exposeInMainWorld("jmcp", {
   state: () => call("state"),
-  install: (id, agentIds) => call("install", id, agentIds),
+  install: (id, agentIds, force) => call("install", id, agentIds, force),
   uninstall: (id, agentIds) => call("uninstall", id, agentIds),
   update: (id) => call("update", id),
   startupUpdates: () => call("startup-updates"),

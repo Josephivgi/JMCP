@@ -130,3 +130,16 @@ test("versions compare by number", () => {
   assert.strictEqual(catalog.compareVersions("0.2.0", "0.2.0"), 0);
   assert.strictEqual(catalog.compareVersions("1.0.0", "1.0.1"), -1);
 });
+
+test("installing where it already is needs force", async () => {
+  const home = scratch();
+  fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+  await catalog.installServer("subagents", ["codex"], home);
+  const file = path.join(home, ".codex", "config.toml");
+  const before = fs.readFileSync(file, "utf8");
+  await assert.rejects(catalog.installServer("subagents", ["codex", "cursor"], home), (e) => /already in Codex/.test(e.message) && e.already.join() === "codex");
+  assert.strictEqual(fs.readFileSync(file, "utf8"), before);
+  assert.ok(!agents.scan(home).find((a) => a.id === "cursor").servers.length, "nothing installed when refused");
+  const r = await catalog.installServer("subagents", ["codex", "cursor"], home, { force: true });
+  assert.ok(r.results.every((x) => x.ok));
+});

@@ -101,7 +101,7 @@ function catalogPage() {
       "div",
       { class: "targets" },
       st.agents.map((a) => {
-        const box = h("input", { type: "checkbox", checked: picked.has(a.id), onchange: (e) => (e.target.checked ? picked.add(a.id) : picked.delete(a.id), render()) });
+        const box = h("input", { type: "checkbox", checked: picked.has(a.id), onchange: (e) => (e.target.checked ? picked.add(a.id) : picked.delete(a.id), (pending = null), render()) });
         return h(
           "label",
           { class: "target" + (a.present ? "" : " absent") },
@@ -137,10 +137,11 @@ function catalogPage() {
       h("div", { class: "tools" }, c.tools.map((t) => h("code", { text: t }))),
       h("div", { class: "section-head" }, h("h2", { text: "Install in" }), h("span", { class: "note", text: "Found agents are picked. Each config file is backed up before the first change." })),
       targets,
+      pending && pending.id === c.id ? pendingView(c) : null,
       h(
         "div",
         { class: "row-actions" },
-        h("button", { class: "btn primary", disabled: busy || !n, onclick: () => runInstall(c.id, [...picked]) }, busy ? "Working…" : "Install in " + n + (n === 1 ? " agent" : " agents")),
+        h("button", { class: "btn primary", disabled: busy || !n || Boolean(pending), onclick: () => askInstall(c, [...picked]) }, busy ? "Working…" : "Install in " + n + (n === 1 ? " agent" : " agents")),
         h("button", { class: "btn", disabled: busy || !inPicked.length, onclick: () => runUninstall(c.id, inPicked) }, "Remove from " + inPicked.length),
         h("button", { class: "btn quiet", disabled: busy, onclick: () => ((picked = new Set(present)), render()) }, "Pick found agents"),
       ),
@@ -166,11 +167,41 @@ function logView(r) {
   );
 }
 
-async function runInstall(id, ids) {
+// Installing where it already is waits for the user to press Continue.
+let pending = null; // {id, ids, already}
+
+function askInstall(c, ids) {
+  const already = ids.filter((id) => c.installedIn.includes(id));
+  if (!already.length) return runInstall(c.id, ids, false);
+  pending = { id: c.id, ids, already };
+  render();
+}
+
+function pendingView(c) {
+  const names = pending.already.map(agentName);
+  const list = names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names[names.length - 1] : names[0];
+  return h(
+    "div",
+    { class: "warn-box", role: "alertdialog", "aria-label": "Already installed" },
+    h("p", { text: c.name + " is already in " + list + ". Installing again replaces its entry in " + (names.length > 1 ? "their config files" : "that config file") + ". Continue only if you are sure." }),
+    h(
+      "div",
+      { class: "row-actions" },
+      h("button", { class: "btn primary", disabled: busy, onclick: () => {
+            const ids = pending.ids;
+            pending = null;
+            runInstall(c.id, ids, true);
+          } }, "Continue"),
+      h("button", { class: "btn", disabled: busy, onclick: () => ((pending = null), render()) }, "Cancel"),
+    ),
+  );
+}
+
+async function runInstall(id, ids, force) {
   busy = true;
   render();
   try {
-    const r = await api.install(id, ids);
+    const r = await api.install(id, ids, force === true);
     st = r.state;
     lastLog = { server: r.server, kind: "install", results: r.results };
   } catch (e) {

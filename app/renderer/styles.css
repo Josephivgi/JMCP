@@ -153,3 +153,5 @@ td.fit { width: 1%; white-space: nowrap; }
   .act-row { grid-template-columns: 90px minmax(0, 1fr) 70px; }
   .act-row .who-col { display: none; }
 }
+.warn-box { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border-radius: 7px; background: color-mix(in oklch, var(--warn) 14%, transparent); border: 1px solid color-mix(in oklch, var(--warn) 45%, transparent); }
+.warn-box p { margin: 0; }

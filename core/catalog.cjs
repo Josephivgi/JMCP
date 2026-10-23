@@ -123,11 +123,26 @@ function catalogItem(id) {
   return item;
 }
 
+// Agents among ids that already have this server.
+function alreadyIn(item, ids, home) {
+  const list = agents.scan(home);
+  return ids.filter((id) => (list.find((a) => a.id === id) || { servers: [] }).servers.some((s) => s.name === item.name));
+}
+
 // Install into the given agents (default: every agent found on this computer).
-async function installServer(id, agentIds, home) {
+// An agent that already has it is only written again with opts.force; without
+// it nothing is installed and the error names those agents (err.already).
+async function installServer(id, agentIds, home, opts) {
   const item = catalogItem(id);
-  const def = await prepare(item, home);
   const targets = agentIds && agentIds.length ? agentIds : agents.scan(home).filter((a) => a.present).map((a) => a.id);
+  const already = alreadyIn(item, targets, home);
+  if (already.length && !(opts && opts.force)) {
+    const names = already.map((a) => (agents.agentById(a) || { name: a }).name);
+    const err = new Error(item.name + " is already in " + names.join(", ") + ". Installing again replaces its entry there.");
+    err.already = already;
+    throw err;
+  }
+  const def = await prepare(item, home);
   const results = [];
   for (const a of targets) {
     try {
@@ -198,4 +213,4 @@ function catalogState(home, scanned) {
   }));
 }
 
-module.exports = { CATALOG, catalogItem, installServer, updateServer, updateAll, uninstallServer, catalogState, compareVersions, jmcpHome, nodeCommand };
+module.exports = { CATALOG, catalogItem, alreadyIn, installServer, updateServer, updateAll, uninstallServer, catalogState, compareVersions, jmcpHome, nodeCommand };

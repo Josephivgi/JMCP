@@ -4,7 +4,8 @@
 // jmcp: the JMCP app's features from a terminal.
 //   jmcp list                         every agent and its MCP servers
 //   jmcp catalog                      JMCP servers and where they are installed
-//   jmcp install <server> [agents..]  install into the given agents (default: all found)
+//   jmcp install <server> [agents..]  install into the given agents (default: all found);
+//                                     --force to write it again where it already is
 //   jmcp uninstall <server> [agents..]
 //   jmcp update [server]              update installed JMCP servers to this version
 //   jmcp probe <agent> <server>       start a configured server and list its tools
@@ -22,7 +23,8 @@ if (hi >= 0) {
   argv.splice(hi, 2);
 }
 const json = argv.includes("--json");
-const args = argv.filter((a) => a !== "--json");
+const force = argv.includes("--force");
+const args = argv.filter((a) => a !== "--json" && a !== "--force");
 const [cmd, ...rest] = args;
 
 function out(value, text) {
@@ -44,7 +46,7 @@ async function main() {
   }
   if (cmd === "install" || cmd === "uninstall") {
     if (!rest[0]) throw new Error("Usage: jmcp " + cmd + " <server> [agents...]");
-    const r = cmd === "install" ? await catalog.installServer(rest[0], rest.slice(1), home || undefined) : catalog.uninstallServer(rest[0], rest.slice(1), home || undefined);
+    const r = cmd === "install" ? await catalog.installServer(rest[0], rest.slice(1), home || undefined, { force }) : catalog.uninstallServer(rest[0], rest.slice(1), home || undefined);
     return out(r, () => r.results.map((x) => (x.ok ? (x.removed === false ? "  -  " : "  ✓  ") : "  ✗  ") + x.agent + "  " + (x.ok ? x.file : x.error)).join("\n"));
   }
   if (cmd === "update") {
@@ -63,6 +65,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error(String(e.message || e));
+  console.error(String(e.message || e) + (e.already ? " Add --force to do it anyway." : ""));
   process.exit(1);
 });
