@@ -9,7 +9,6 @@ CLI, Qwen Code, Grok, GitHub Copilot CLI, Windsurf and VS Code.
 ## The app
 
 - **JMCP servers**: JMCP's own servers. Pick agents and install or remove.
-- **All servers**: every MCP server and which agents have it.
 - **Agents**: one page per agent with the servers in its own config file,
   their command or URL, on or off, and a Check tools button that starts the
   server hidden and lists its tools.

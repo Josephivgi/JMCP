@@ -128,11 +128,6 @@ td.fit { width: 1%; white-space: nowrap; }
 .tool-list div { font-size: 12.5px; color: var(--muted); }
 .tool-list code { color: var(--ink); margin-right: 6px; }
 
-.matrix { overflow-x: auto; }
-.matrix th.agent { writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; padding: 10px 6px; text-align: left; height: 128px; vertical-align: bottom; }
-.matrix td.cell { text-align: center; padding: 9px 6px; width: 1%; }
-.mark { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
-.mark.off { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
 
 .empty { padding: 18px; color: var(--muted); }
 .error-box { padding: 10px 12px; border-radius: 7px; background: color-mix(in oklch, var(--danger) 12%, transparent); color: var(--danger); font-size: 13px; }

@@ -1,8 +1,8 @@
 "use strict";
 
-// JMCP window. Pages: JMCP servers (install into agents), All servers (which
-// MCP servers each agent has), Activity (what jmcp-subagents has run), and
-// one page per agent with the servers in its own config.
+// JMCP window. Pages: JMCP servers (install into agents), Activity (what
+// jmcp-subagents has run), and one page per agent with the servers in its
+// own config.
 
 window.__jmcpErrors = [];
 window.addEventListener("error", (e) => window.__jmcpErrors.push(String(e.message)));
@@ -37,7 +37,6 @@ function h(tag, attrs, ...kids) {
 
 const PAGES = [
   { id: "catalog", label: "JMCP servers", icon: "M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z" },
-  { id: "all", label: "All servers", icon: "M3 5h14M3 10h14M3 15h14" },
   { id: "activity", label: "Activity", icon: "M2 10h4l2-5 4 10 2-5h4" },
 ];
 
@@ -186,46 +185,6 @@ async function runUninstall(id, ids) {
   }
   busy = false;
   render();
-}
-
-// ---- All servers ----
-
-function allPage() {
-  const agents = st.agents.filter((a) => a.present || a.servers.length);
-  const names = [...new Set(st.agents.flatMap((a) => a.servers.map((s) => s.name)))].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
-  const total = st.agents.reduce((n, a) => n + a.servers.length, 0);
-  const table = names.length
-    ? h(
-        "div",
-        { class: "panel matrix" },
-        h(
-          "table",
-          {},
-          h("thead", {}, h("tr", {}, h("th", { text: "Server" }), agents.map((a) => h("th", { class: "agent", text: a.name })))),
-          h(
-            "tbody",
-            {},
-            names.map((n) =>
-              h(
-                "tr",
-                {},
-                h("td", { class: "name", text: n }),
-                agents.map((a) => {
-                  const s = a.servers.find((x) => x.name === n);
-                  return h("td", { class: "cell", title: s ? a.name + (s.enabled ? "" : " (turned off)") : "" }, s ? h("span", { class: "mark" + (s.enabled ? "" : " off") }) : null);
-                }),
-              ),
-            ),
-          ),
-        ),
-      )
-    : h("div", { class: "panel empty", text: "No agent on this computer has MCP servers yet." });
-  return h(
-    "div",
-    { class: "page" },
-    head("All servers", names.length + " servers, " + total + " entries across " + agents.length + " agents. A hollow mark means the agent has it turned off."),
-    table,
-  );
 }
 
 // ---- One agent ----
@@ -390,7 +349,7 @@ function activityPage() {
 function render() {
   if (!st) return;
   renderSide();
-  const view = page === "all" ? allPage() : page === "activity" ? activityPage() : page.startsWith("agent:") ? agentPage(page.slice(6)) : catalogPage();
+  const view = page === "activity" ? activityPage() : page.startsWith("agent:") ? agentPage(page.slice(6)) : catalogPage();
   $main.replaceChildren(view);
 }
 
