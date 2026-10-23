@@ -1,0 +1,23 @@
+{
+  "name": "jmcp",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "author": "Josephivgi",
+  "description": "JMCP: see and manage the MCP servers of every coding agent on your computer, and install JMCP servers (starting with cross-provider subagents) into all of them at once.",
+  "repository": { "type": "git", "url": "https://github.com/Josephivgi/JMCP.git" },
+  "main": "app/main.cjs",
+  "bin": { "jmcp": "cli/jmcp.cjs" },
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke",
+    "test": "node --test --test-concurrency=1 test/*.test.cjs"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1",
+    "smol-toml": "^1.4.2"
+  },
+  "devDependencies": {
+    "electron": "^44.4.3"
+  }
+}

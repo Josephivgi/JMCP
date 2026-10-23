@@ -1,0 +1,15 @@
+{
+  "name": "jmcp-subagents",
+  "version": "0.1.0",
+  "description": "MCP server that lets any coding agent start subagents from other providers: Claude Code, Codex, Factory Droid, Devin, Cursor, OpenCode, Gemini, Qwen, Grok and more. The first official JMCP server.",
+  "license": "MIT",
+  "author": "Josephivgi",
+  "repository": { "type": "git", "url": "https://github.com/Josephivgi/JMCP.git", "directory": "servers/subagents" },
+  "bin": { "jmcp-subagents": "server.cjs" },
+  "main": "server.cjs",
+  "files": ["server.cjs", "lib/", "README.md"],
+  "engines": { "node": ">=22.13" },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.290"
+  }
+}
