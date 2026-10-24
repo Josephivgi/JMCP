@@ -9,10 +9,18 @@
 //   jmcp uninstall <server> [agents..]
 //   jmcp update [server]              update installed JMCP servers to this version
 //   jmcp probe <agent> <server>       start a configured server and list its tools
+//   jmcp rules list                   show rules set in the JMCP app (read-only)
+//   jmcp memory list                  show memories agents share (jmcp-memory)
+//   jmcp skills list                  show the skills library (jmcp-skills)
+//   jmcp instructions list [folder]   instruction files (AGENTS.md, CLAUDE.md, ...)
 // --home <dir> works on a scratch home folder instead of yours.
 
 const agents = require("../core/agents.cjs");
 const catalog = require("../core/catalog.cjs");
+const rules = require("../core/rules.cjs");
+const memory = require("../core/memory.cjs");
+const skills = require("../core/skills.cjs");
+const instructions = require("../core/instructions.cjs");
 const { probe } = require("../core/mcp-client.cjs");
 
 const argv = process.argv.slice(2);
@@ -44,6 +52,27 @@ async function main() {
     const st = catalog.catalogState(home || undefined);
     return out(st, () => st.map((c) => c.name + (c.official ? " (official)" : "") + "\n  " + c.description + "\n  installed in: " + (c.installedIn.join(", ") || "none")).join("\n"));
   }
+  if (cmd === "rules" && rest[0] === "list" && rest.length === 1) {
+    const list = rules.list(home || undefined);
+    return out(list, () => list.map((r) =>
+      (r.enabled ? "" : "(off) ") + r.kind.toUpperCase() + "  " + r.text,
+    ).join("\n") || "  (no rules)");
+  }
+  if (cmd === "instructions" && rest[0] === "list") {
+    const r = instructions.list(home || undefined, rest[1]);
+    return out(r, () =>
+      r.agents.map((f) => (f.exists ? "● " : "○ ") + f.agent + "  " + f.path).join("\n") +
+      r.folders.map((d) => "\n" + d.path + (d.files.length ? d.files.map((f) => "\n    " + f.name).join("") : "\n    (no instruction files)")).join(""),
+    );
+  }
+  if (cmd === "memory" && rest[0] === "list" && rest.length === 1) {
+    const list = memory.list(home || undefined);
+    return out(list, () => list.map((m) => m.name + "  " + m.title + "  (" + m.author + ")").join("\n") || "  (no memories)");
+  }
+  if (cmd === "skills" && rest[0] === "list" && rest.length === 1) {
+    const list = skills.list(home || undefined);
+    return out(list, () => list.map((s) => (s.enabled ? "" : "(off) ") + s.name + "  " + s.description.slice(0, 100)).join("\n") || "  (no skills)");
+  }
   if (cmd === "install" || cmd === "uninstall") {
     if (!rest[0]) throw new Error("Usage: jmcp " + cmd + " <server> [agents...]");
     const r = cmd === "install" ? await catalog.installServer(rest[0], rest.slice(1), home || undefined, { force }) : catalog.uninstallServer(rest[0], rest.slice(1), home || undefined);
@@ -61,7 +90,7 @@ async function main() {
     const r = await probe(s);
     return out(r, () => (r.ok ? r.tools.map((t) => "  " + t.name).join("\n") || "  (no tools)" : "  ✗ " + r.error));
   }
-  console.log("Usage: jmcp list | catalog | install <server> [agents..] | uninstall <server> [agents..] | update [server] | probe <agent> <server>  [--home dir] [--json]");
+  console.log("Usage: jmcp list | catalog | rules list | memory list | skills list | instructions list [folder] | install <server> [agents..] | uninstall <server> [agents..] | update [server] | probe <agent> <server>  [--home dir] [--json]");
 }
 
 main().catch((e) => {

@@ -1,0 +1,12 @@
+{
+  "name": "jmcp-rules",
+  "version": "0.2.0",
+  "description": "Read-only MCP server for rules set in the JMCP app.",
+  "license": "MIT",
+  "author": "Josephivgi",
+  "repository": { "type": "git", "url": "https://github.com/Josephivgi/JMCP.git", "directory": "servers/rules" },
+  "bin": { "jmcp-rules": "server.cjs" },
+  "main": "server.cjs",
+  "files": ["server.cjs", "lib/", "README.md"],
+  "engines": { "node": ">=22.13" }
+}

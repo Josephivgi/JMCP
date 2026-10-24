@@ -27,6 +27,36 @@ The first time JMCP changes a file it saves a `.jmcp-backup` copy next to it.
 Cross-provider subagents, ported from the JAgents Subagents plugin so it runs
 without the JAgents app. See [servers/subagents](servers/subagents/README.md).
 
+## jmcp-rules
+
+Set DO and DON'T rules in the JMCP app and install jmcp-rules into your agents
+to share them. Agents can read the latest rules with the `rules`
+tool, but only the app can edit them. See [servers/rules](servers/rules/README.md).
+Use `node cli/jmcp.cjs rules list` to view them in a terminal.
+
+## jmcp-instructions
+
+Manage instruction files instead of rules: `AGENTS.md`, `CLAUDE.md`,
+`GEMINI.md` and `QWEN.md`. The Instructions page lists each agent's global
+file and any project folders you add, with an editor to create, edit and
+delete them. Deleted and overwritten files are kept so you can restore them.
+Installed agents get `list`, `read`, `write` and `delete` tools for the same
+files. See [servers/instructions](servers/instructions/README.md).
+
+## jmcp-memory
+
+Memory shared by every agent. What one agent saves (a preference, a decision,
+a project fact), the others can search and read. The Memory page lists,
+searches, adds, edits and deletes memories and shows which agent saved each
+one. See [servers/memory](servers/memory/README.md).
+
+## jmcp-skills
+
+One skills library for every agent, including agents with no skills feature.
+The Skills page adds, edits, turns off and deletes skills, and imports
+`SKILL.md` folders from Claude Code, Codex, Droid, Cursor, Gemini, OpenCode,
+Grok and `.agents`. See [servers/skills](servers/skills/README.md).
+
 ## Run
 
 ```

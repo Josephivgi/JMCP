@@ -9,9 +9,14 @@
 
 const path = require("node:path");
 const fs = require("node:fs");
-const { app, BrowserWindow, ipcMain, shell, nativeTheme } = require("electron");
+const { app, BrowserWindow, ipcMain, shell, nativeTheme, dialog } = require("electron");
 const agents = require("../core/agents.cjs");
 const catalog = require("../core/catalog.cjs");
+const rules = require("../core/rules.cjs");
+const memory = require("../core/memory.cjs");
+const skills = require("../core/skills.cjs");
+const health = require("../core/health.cjs");
+const instructions = require("../core/instructions.cjs");
 const { activity } = require("../core/activity.cjs");
 const { probe } = require("../core/mcp-client.cjs");
 
@@ -26,6 +31,8 @@ const HOME = flag("--home") || process.env.JMCP_TEST_HOME || undefined;
 
 app.setName("JMCP");
 if (SMOKE) app.disableHardwareAcceleration();
+// --theme dark|light forces a theme (smoke runs check both).
+if (flag("--theme")) nativeTheme.themeSource = flag("--theme");
 
 function state() {
   const list = agents.scan(HOME);
@@ -48,6 +55,10 @@ handle("install", async (id, agentIds, force) => {
   const r = await catalog.installServer(String(id), Array.isArray(agentIds) ? agentIds.map(String) : [], HOME, { force: force === true });
   return Object.assign({ state: state() }, r);
 });
+handle("install-all", async () => {
+  const r = await catalog.installAll(HOME);
+  return { servers: r, state: state() };
+});
 handle("update", async (id) => {
   const r = await catalog.updateServer(String(id), HOME);
   return Object.assign(r, { state: state() });
@@ -64,6 +75,55 @@ handle("probe", async (agentId, name) => {
   return probe(s, 25000);
 });
 handle("activity", () => activity(HOME, 100));
+handle("rules-list", () => rules.list(HOME));
+handle("rules-add", (input) => rules.add(HOME, input));
+handle("rules-update", (id, patch) => rules.update(HOME, String(id), patch));
+handle("rules-remove", (id) => rules.remove(HOME, String(id)));
+handle("rules-preview", () => rules.instructions(rules.active(HOME)));
+handle("memory-list", () => memory.list(HOME));
+handle("memory-save", (input) => memory.save(HOME, Object.assign({}, input, { author: "JMCP app" })).memory);
+handle("memory-update", (id, patch) => memory.update(HOME, String(id), patch));
+handle("memory-remove", (id) => memory.remove(HOME, String(id)));
+handle("skills-list", () => skills.list(HOME));
+handle("skills-add", (input) => skills.add(HOME, Object.assign({}, input, { origin: "" })));
+handle("skills-update", (id, patch) => skills.update(HOME, String(id), patch));
+handle("skills-remove", (id) => skills.remove(HOME, String(id)));
+handle("skills-importable", () => skills.importable(HOME));
+// Only files the importable list offered can be imported.
+// Health page. Host checks only run for hosts named in ~/.ssh/config.
+function knownHost(name) {
+  const n = String(name || "");
+  if (!health.quick.sshConfig(HOME).hosts.some((x) => x.name === n)) throw new Error(n + " is not a host in ~/.ssh/config.");
+  return n;
+}
+handle("health-local", () => health.quick.localNow());
+handle("health-ssh", () => health.quick.sshInventory(HOME));
+handle("health-host", (name) => health.quick.checkHost(knownHost(name), HOME));
+handle("health-update", (name, opts) => health.quick.applyUpdates(knownHost(name), HOME, { simulate: Boolean(opts && opts.simulate) }));
+handle("health-full", (target) => health.fullCheck(target === "local" ? "local" : knownHost(target)));
+handle("health-notes", (opts) => health.notes.list(HOME, { dismissed: Boolean(opts && opts.dismissed) }));
+handle("health-note-dismiss", (id, back) => health.notes.dismiss(HOME, String(id), back === true));
+handle("health-notes-dismiss-all", () => health.notes.dismissAll(HOME));
+handle("health-note-remove", (id) => health.notes.remove(HOME, String(id)));
+handle("skills-import", (files) => {
+  const offered = new Set(skills.importable(HOME).map((x) => x.file));
+  return skills.importFiles(HOME, (Array.isArray(files) ? files : []).map(String).filter((f) => offered.has(f)));
+});
+handle("instructions-list", () => instructions.list(HOME));
+handle("instructions-detect", () => instructions.detectFolders(HOME));
+handle("instructions-read", (file) => instructions.read(String(file)));
+handle("instructions-write", (file, text, expectedHash) => instructions.write(HOME, String(file), String(text), { by: "app", expectedHash: typeof expectedHash === "string" ? expectedHash : undefined }));
+handle("instructions-remove", (file) => instructions.remove(HOME, String(file), { by: "app" }));
+handle("instructions-add-folder", (folder) => instructions.addFolder(HOME, String(folder)));
+handle("instructions-remove-folder", (folder) => instructions.removeFolder(HOME, String(folder)));
+handle("instructions-trash", () => instructions.trash(HOME));
+handle("instructions-trash-text", (id) => instructions.trashText(HOME, String(id)));
+handle("instructions-restore", (id) => instructions.restore(HOME, String(id)));
+handle("instructions-forget", (id) => instructions.forget(HOME, String(id)));
+handle("pick-folder", async () => {
+  const r = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), { properties: ["openDirectory"] });
+  return r.canceled ? "" : r.filePaths[0] || "";
+});
 handle("reveal", (file) => {
   const f = String(file || "");
   if (!f) return false;
@@ -76,11 +136,13 @@ function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors;
   const win = new BrowserWindow({
     width: 1280,
-    height: 820,
+    // --height N makes smoke captures taller to see a whole page.
+    height: SMOKE && Number(flag("--height")) ? Number(flag("--height")) : 820,
     minWidth: 900,
     minHeight: 560,
     show: !SMOKE,
     title: "JMCP",
+    icon: path.join(__dirname, "assets", process.platform === "win32" ? "icon.ico" : "icon.png"),
     backgroundColor: dark ? "#16181d" : "#f5f6f8",
     autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: true, nodeIntegration: false, offscreen: SMOKE },
@@ -101,16 +163,45 @@ async function smoke(win) {
     await new Promise((r) => setTimeout(r, 200));
   }
   await new Promise((r) => setTimeout(r, 600));
-  // --smoke-click "Button text" (repeatable): press those buttons in order,
-  // letting the page settle after each.
-  const clicks = argv.flatMap((x, i) => (x === "--smoke-click" && argv[i + 1] ? [argv[i + 1]] : []));
-  for (const click of clicks) {
-    const found = await win.webContents.executeJavaScript("(() => { const b = [...document.querySelectorAll('main button')].find((x) => x.textContent.trim().startsWith(" + JSON.stringify(click) + ")); if (b) b.click(); return Boolean(b); })()");
-    if (!found) process.stderr.write("smoke: no button " + click + "\n");
+  async function settle() {
     const end = Date.now() + 120000;
-    while (Date.now() < end && (await win.webContents.executeJavaScript("/Working|Checking/.test(document.body.innerText)"))) await new Promise((r) => setTimeout(r, 300));
+    while (Date.now() < end && (await win.webContents.executeJavaScript("/Working|Checking|Installing|Loading|Looking for|Reading/.test(document.querySelector('main').innerText)")))
+      await new Promise((r) => setTimeout(r, 300));
     await new Promise((r) => setTimeout(r, 400));
   }
+  // Hidden smoke actions run in order to exercise forms without showing the window.
+  await settle();
+  for (let i = 0; i < argv.length; i++) {
+    const action = argv[i];
+    if (!["--smoke-type", "--smoke-set", "--smoke-toggle", "--smoke-click"].includes(action)) continue;
+    const entry = argv[++i];
+    if (!entry) throw new Error("smoke: missing value for " + action);
+    if (action === "--smoke-type" || action === "--smoke-set") {
+      const eq = entry.indexOf("=");
+      if (eq < 0) throw new Error("smoke: expected " + action + " Label=value");
+      const label = entry.slice(0, eq);
+      const value = entry.slice(eq + 1);
+      const selector = action === "--smoke-set" ? "main select" : "main input, main textarea";
+      const event = action === "--smoke-set" ? "change" : "input";
+      const found = await win.webContents.executeJavaScript("(() => { const el = [...document.querySelectorAll(" + JSON.stringify(selector) + ")].find((x) => x.getAttribute('aria-label') === " + JSON.stringify(label) + "); if (!el) return false; el.value = " + JSON.stringify(value) + "; el.dispatchEvent(new Event(" + JSON.stringify(event) + ", { bubbles: true })); return true; })()");
+      if (!found) throw new Error("smoke: no input " + label);
+      if (action === "--smoke-set") await settle();
+      continue;
+    }
+    if (action === "--smoke-toggle") {
+      const found = await win.webContents.executeJavaScript("(() => { const el = [...document.querySelectorAll('main input[type=checkbox]')].find((x) => x.getAttribute('aria-label') === " + JSON.stringify(entry) + "); if (el) el.click(); return Boolean(el); })()");
+      if (!found) throw new Error("smoke: no checkbox " + entry);
+      await settle();
+      continue;
+    }
+    const found = await win.webContents.executeJavaScript("(() => { const b = [...document.querySelectorAll('main button')].find((x) => x.textContent.trim().startsWith(" + JSON.stringify(entry) + ") || x.getAttribute('aria-label') === " + JSON.stringify(entry) + "); if (b) b.click(); return Boolean(b); })()");
+    if (!found) throw new Error("smoke: no button " + entry);
+    await settle();
+  }
+  await settle();
+  // --scroll N scrolls the page down before the capture.
+  if (Number(flag("--scroll"))) await win.webContents.executeJavaScript("document.querySelector('main').scrollTop = " + Number(flag("--scroll")));
+  await new Promise((r) => setTimeout(r, 200));
   const img = await win.webContents.capturePage();
   fs.writeFileSync(out, img.toPNG());
   const text = await win.webContents.executeJavaScript("document.querySelector('main').innerText");

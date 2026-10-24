@@ -1,0 +1,12 @@
+{
+  "name": "jmcp-instructions",
+  "version": "0.1.0",
+  "description": "MCP server that lets agents manage AGENTS.md and other instruction files, with a restorable trash in the JMCP app.",
+  "license": "MIT",
+  "author": "Josephivgi",
+  "repository": { "type": "git", "url": "https://github.com/Josephivgi/JMCP.git", "directory": "servers/instructions" },
+  "bin": { "jmcp-instructions": "server.cjs" },
+  "main": "server.cjs",
+  "files": ["server.cjs", "lib/", "README.md"],
+  "engines": { "node": ">=22.13" }
+}

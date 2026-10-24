@@ -27,6 +27,57 @@ const CATALOG = [
     passEnv: ["JMCP_SUBAGENT", "JMCP_SUBAGENT_PARENT"],
     toolTimeoutSec: 1800,
   },
+  {
+    id: "rules",
+    name: "jmcp-rules",
+    title: "Rules",
+    official: true,
+    description: "Rules set in the JMCP app reach every agent where jmcp-rules is installed.",
+    tools: ["rules"],
+    source: path.join(ROOT, "servers", "rules"),
+    entry: "server.cjs",
+  },
+  {
+    id: "instructions",
+    name: "jmcp-instructions",
+    title: "Instructions",
+    official: true,
+    description: "Lets agents list, read, write and delete AGENTS.md, CLAUDE.md, GEMINI.md and QWEN.md files. Deleted and replaced files can be restored on the Instructions page.",
+    tools: ["list", "read", "write", "delete"],
+    source: path.join(ROOT, "servers", "instructions"),
+    entry: "server.cjs",
+  },
+  {
+    id: "memory",
+    name: "jmcp-memory",
+    title: "Memory",
+    official: true,
+    description: "Memory shared by every agent: what one agent saves (your preferences, past decisions, project facts), the others can search and read. Manage it on the Memory page.",
+    tools: ["memory_search", "memory_read", "memory_save", "memory_delete"],
+    source: path.join(ROOT, "servers", "memory"),
+    entry: "server.cjs",
+  },
+  {
+    id: "skills",
+    name: "jmcp-skills",
+    title: "Skills",
+    official: true,
+    description: "Your skills library for every agent, even ones with no skills feature. Agents see each skill's description and load the full instructions when a task matches. Manage it on the Skills page.",
+    tools: ["skills_list", "skill_read"],
+    source: path.join(ROOT, "servers", "skills"),
+    entry: "server.cjs",
+  },
+  {
+    id: "health",
+    name: "jmcp-health",
+    title: "Health",
+    official: true,
+    description: "Checks this computer or any SSH host, read-only, and explains what is wrong: problems found, why text is slow to show in the browser, and why the computer feels glitchy. Agents can also leave you cards on the Health page.",
+    tools: ["targets", "problems", "slow_text", "glitchy", "show_user"],
+    source: path.join(ROOT, "servers", "health"),
+    entry: "server.cjs",
+    toolTimeoutSec: 180,
+  },
 ];
 
 function jmcpHome(home) {
@@ -188,6 +239,23 @@ async function updateAll(home) {
   return out;
 }
 
+// Every JMCP server into every agent found on this computer that does not
+// have it yet. Agents that already have a server are left as they are.
+async function installAll(home) {
+  const found = agents.scan(home).filter((a) => a.present);
+  const out = [];
+  for (const item of CATALOG) {
+    const missing = found.filter((a) => !a.servers.some((s) => s.name === item.name)).map((a) => a.id);
+    if (!missing.length) continue;
+    try {
+      out.push(Object.assign({ ok: true }, await installServer(item.id, missing, home)));
+    } catch (e) {
+      out.push({ ok: false, server: item.name, error: String(e.message || e), results: [] });
+    }
+  }
+  return out;
+}
+
 function uninstallServer(id, agentIds, home) {
   const item = catalogItem(id);
   const targets = agentIds && agentIds.length ? agentIds : agents.AGENTS.map((a) => a.id);
@@ -213,4 +281,4 @@ function catalogState(home, scanned) {
   }));
 }
 
-module.exports = { CATALOG, catalogItem, alreadyIn, installServer, updateServer, updateAll, uninstallServer, catalogState, compareVersions, jmcpHome, nodeCommand };
+module.exports = { CATALOG, catalogItem, alreadyIn, installServer, installAll, updateServer, updateAll, uninstallServer, catalogState, compareVersions, jmcpHome, nodeCommand };

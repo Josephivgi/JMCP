@@ -1,0 +1,12 @@
+{
+  "name": "jmcp-skills",
+  "version": "0.1.0",
+  "description": "Read-only MCP server that gives every coding agent the skills managed in the JMCP app.",
+  "license": "MIT",
+  "author": "Josephivgi",
+  "repository": { "type": "git", "url": "https://github.com/Josephivgi/JMCP.git", "directory": "servers/skills" },
+  "bin": { "jmcp-skills": "server.cjs" },
+  "main": "server.cjs",
+  "files": ["server.cjs", "lib/", "README.md"],
+  "engines": { "node": ">=22.13" }
+}
