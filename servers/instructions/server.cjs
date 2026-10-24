@@ -129,6 +129,12 @@ const methods = {
   initialize(params) {
     const asked = params.protocolVersion;
     const text = store.master();
+    // Put the master instructions line back in any agent file that lost it.
+    try {
+      store.syncPointers(undefined, { addOnly: true });
+    } catch {
+      /* a locked file; the next session start tries again */
+    }
     return {
       protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
       capabilities: { tools: { listChanged: false } },

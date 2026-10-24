@@ -217,6 +217,12 @@ async function smoke(win) {
 app.whenReady().then(() => {
   // Bring installed JMCP servers up to this version before the window asks.
   startupUpdates = catalog.updateAll(HOME).catch((e) => [{ ok: false, server: "jmcp", error: String(e.message || e) }]);
+  // Each agent file gets, or loses, the master instructions line.
+  try {
+    instructions.syncPointers(HOME);
+  } catch (e) {
+    process.stderr.write("master instructions line: " + (e.message || e) + "\n");
+  }
   const win = createWindow();
   if (SMOKE) {
     win.webContents.on("console-message", (e) => {

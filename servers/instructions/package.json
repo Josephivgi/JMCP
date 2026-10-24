@@ -1,6 +1,6 @@
 {
   "name": "jmcp-instructions",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "MCP server that gives every agent the user's master instructions and lets agents manage AGENTS.md and other instruction files, with a restorable trash in the JMCP app.",
   "license": "MIT",
   "author": "Josephivgi",

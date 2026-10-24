@@ -11,6 +11,16 @@ with a line saying the agent must follow it in every task. Text over 32 KB is
 cut there, with a note to call the tool for the rest. Agents can read it but
 never change or delete it.
 
+Some agents (Factory Droid) never show server instructions. So while master
+instructions are set, each agent's global instruction file (the files `list`
+shows, for agents whose folder exists) starts with one line telling the agent
+to call `master_instructions` before its first reply. The line ends with an
+`<!-- JMCP master instructions ... -->` marker. JMCP adds it when you save
+master instructions, the app checks it at start, and the server puts it back
+at every agent session start if it went missing. Deleting the master
+instructions takes the line out again. Files are changed in place, so linked
+files stay linked, and the old version goes to the trash first.
+
 Tools:
 
 - `master_instructions`: the current master instructions, in full, with the

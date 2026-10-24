@@ -46,7 +46,10 @@ files. See [servers/instructions](servers/instructions/README.md).
 **Master instructions** is one file at the top of the Instructions page. Every
 agent with jmcp-instructions gets it when its session starts, labeled as
 master instructions it must follow, and can read the latest text with the
-`master_instructions` tool. Only the app can change it.
+`master_instructions` tool. Only the app can change it. While it is set, each
+agent's global instruction file starts with a line telling the agent to call
+`master_instructions` first, for agents that ignore server instructions. JMCP
+keeps that line there and removes it when you delete the master instructions.
 
 ## jmcp-memory
 

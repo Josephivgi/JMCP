@@ -403,7 +403,7 @@ function write(home, file, text, opts) {
   if (Buffer.byteLength(text) > limit) throw new Error("content is larger than 1 MB.");
   const by = (opts && opts.by) || "app";
   notAgentOnMaster(file, home, by);
-  return locked(home, (db) => {
+  const r = locked(home, (db) => {
     const before = stat(file) ? fs.readFileSync(file, "utf8") : null;
     const expected = opts && opts.expectedHash;
     if (expected === "" && before !== null)
@@ -427,6 +427,13 @@ function write(home, file, text, opts) {
     }
     return info(file, { hash: hash(text), changed: true, created: before === null });
   });
+  return afterMaster(home, file, r);
+}
+
+// A change to the master instructions updates the line in every agent file.
+function afterMaster(home, file, result) {
+  if (isMaster(file, home)) result.pointers = syncPointers(home);
+  return result;
 }
 
 // Move the file into the trash. The app can restore it.
@@ -436,12 +443,93 @@ function remove(home, file, opts) {
   const by = (opts && opts.by) || "app";
   notAgentOnMaster(file, home, by);
   if (!stat(file)) throw new Error("No file at " + file + ".");
-  return locked(home, (db) => {
+  const r = locked(home, (db) => {
     if (!stat(file)) throw new Error("No file at " + file + ".");
     const id = keep(home, db, file, "deleted", by);
     fs.rmSync(file);
     return { path: file, trashId: id };
   });
+  return afterMaster(home, file, r);
+}
+
+// While master instructions are set, each agent's global file starts with
+// this line, because some agents (Factory Droid) never show MCP server
+// instructions and only call the tool when a file tells them to. JMCP puts
+// the line back when it goes missing and takes it out when the master
+// instructions are deleted. The marker finds it again.
+const POINTER_MARK = "<!-- JMCP master instructions";
+const POINTER = "Before your first reply in every session, call the master_instructions tool of the jmcp-instructions MCP server and follow what it returns. " + POINTER_MARK + ": JMCP keeps this line here while they are set. -->";
+
+function pointerLines(text) {
+  return text.split("\n").filter((l) => l.includes(POINTER_MARK));
+}
+
+// Whether the file already has the line exactly once (want) or not at all.
+function pointerOk(text, want) {
+  const lines = pointerLines(text);
+  return want ? lines.length === 1 && lines[0].replace(/\r$/, "") === POINTER : lines.length === 0;
+}
+
+function withoutPointer(text) {
+  const lines = text.split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes(POINTER_MARK)) {
+      out.push(lines[i]);
+      continue;
+    }
+    // Also drop the blank line JMCP put after it at the top.
+    if (!out.length && lines[i + 1] !== undefined && !lines[i + 1].trim()) i++;
+  }
+  return out.join("\n");
+}
+
+// Add or remove the line in one file. Changes happen in place, so a file
+// that is a link (CLAUDE.md to AGENTS.md) stays one. The old version goes to
+// the trash first. Returns true when the file changed.
+function pointerFile(home, file, want) {
+  const current = () => {
+    const s = stat(file);
+    if (s && s.size > MAX_BYTES) return undefined;
+    return s ? fs.readFileSync(file, "utf8") : null;
+  };
+  const done = (before) => before === undefined || (before === null ? !want : pointerOk(before, want));
+  // Most session starts change nothing; check before taking the lock.
+  if (done(current())) return false;
+  checkLink(file, home);
+  return locked(home, (db) => {
+    const before = current();
+    if (done(before)) return false;
+    const eol = before && before.includes("\r\n") ? "\r\n" : "\n";
+    const rest = before === null ? "" : withoutPointer(before);
+    if (before !== null) keep(home, db, file, "replaced", "jmcp");
+    if (!want && !rest.trim()) {
+      // The file only held the line.
+      fs.rmSync(file);
+      return true;
+    }
+    fs.writeFileSync(file, want ? POINTER + eol + (rest.trim() ? eol + rest : "") : rest);
+    return true;
+  });
+}
+
+// Bring every agent's global file in line with the master instructions.
+// Agents whose folder is not on this computer are skipped. addOnly never
+// removes lines (agent sessions use it, so a server started on a scratch
+// JMCP home cannot take them out).
+function syncPointers(home, opts) {
+  const want = master(home) !== "";
+  const out = { changed: [], errors: [] };
+  if (!want && opts && opts.addOnly) return out;
+  for (const a of agentFiles(home)) {
+    if (!fs.existsSync(path.dirname(a.file))) continue;
+    try {
+      if (pointerFile(home, a.file, want)) out.changed.push(a.file);
+    } catch (e) {
+      out.errors.push({ path: a.file, error: String(e.message || e) });
+    }
+  }
+  return out;
 }
 
 function trash(home) {
@@ -476,4 +564,4 @@ function forget(home, id) {
   });
 }
 
-module.exports = { NAMES, masterPath, master, agentFiles, rulesDir, rulesFiles, checkPath, folders, addFolder, removeFolder, detectFolders, hiddenFolders, list, read, write, remove, trash, trashText, restore, forget, hash };
+module.exports = { NAMES, POINTER, masterPath, master, syncPointers, agentFiles, rulesDir, rulesFiles, checkPath, folders, addFolder, removeFolder, detectFolders, hiddenFolders, list, read, write, remove, trash, trashText, restore, forget, hash };

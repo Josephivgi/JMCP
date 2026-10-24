@@ -103,7 +103,7 @@ test("stdio server lists, reads, writes and deletes", async () => {
   const project = path.join(home, "proj");
   fs.mkdirSync(project);
   const file = path.join(project, "AGENTS.md");
-  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: path.join(home, ".jmcp") } });
+  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: path.join(home, ".jmcp"), USERPROFILE: home, HOME: home } });
   try {
     const init = await c.initialize("test");
     assert.strictEqual(init.serverInfo.name, "jmcp-instructions");
@@ -240,7 +240,7 @@ test("master instructions: the app sets them, agents get them labeled and cannot
   assert.strictEqual(ins.list(home).master.exists, false);
   assert.strictEqual(ins.master(home), "");
 
-  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp } });
+  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp, USERPROFILE: home, HOME: home } });
   try {
     // Not set: no master block, and the tool says so.
     assert.doesNotMatch((await c.initialize("test")).instructions, /MASTER INSTRUCTIONS/);
@@ -262,7 +262,7 @@ test("master instructions: the app sets them, agents get them labeled and cannot
   assert.strictEqual(ins.list(home).master.exists, true);
   assert.deepStrictEqual(ins.trash(home).map((t) => [t.path, t.reason]), [[file, "replaced"]]);
 
-  const d = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp } });
+  const d = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp, USERPROFILE: home, HOME: home } });
   try {
     const init = await d.initialize("test");
     assert.match(init.instructions, /^MASTER INSTRUCTIONS\nThe user set these master instructions in JMCP. You must follow them in every task./);
@@ -289,7 +289,7 @@ test("master instructions: the app sets them, agents get them labeled and cannot
   // Very long text is cut in the server instructions, never in the tool.
   const long = "rule ".repeat(10000) + "LAST";
   ins.write(home, file, long, { by: "app", expectedHash: ins.read(file, home).hash });
-  const e = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp } });
+  const e = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp, USERPROFILE: home, HOME: home } });
   try {
     const init = await e.initialize("test");
     assert.match(init.instructions, /Cut here. Call the master_instructions tool for the rest./);
@@ -305,4 +305,73 @@ test("master instructions: the app sets them, agents get them labeled and cannot
   const del = ins.trash(home).find((t) => t.reason === "deleted");
   ins.restore(home, del.id);
   assert.match(ins.master(home), /LAST$/);
+});
+
+test("master instructions line: added to agent files, kept there, removed with the master", async () => {
+  const home = scratch();
+  const jmcp = path.join(home, ".jmcp");
+  const codex = path.join(home, ".codex", "AGENTS.md");
+  const droid = path.join(home, ".factory", "AGENTS.md");
+  const claude = path.join(home, ".claude", "CLAUDE.md");
+  fs.mkdirSync(path.dirname(codex), { recursive: true });
+  fs.mkdirSync(path.dirname(droid), { recursive: true });
+  fs.mkdirSync(path.dirname(claude), { recursive: true });
+  fs.writeFileSync(codex, "# Codex\r\nUse tabs.\r\n");
+  // Droid's file is a hard link to Codex's; it must stay one.
+  fs.linkSync(codex, droid);
+
+  // Nothing happens while no master instructions are set.
+  assert.deepStrictEqual(ins.syncPointers(home), { changed: [], errors: [] });
+  assert.strictEqual(fs.existsSync(claude), false);
+
+  const r = ins.write(home, ins.masterPath(home), "Call me Captain.\n", { by: "app", expectedHash: "" });
+  assert.deepStrictEqual(r.pointers.errors, []);
+  assert.deepStrictEqual(r.pointers.changed.sort(), [claude, codex].sort());
+  const lines = (f) => fs.readFileSync(f, "utf8").split("\n").filter((l) => l.includes("master_instructions"));
+  // On top, once, with the file's own line endings and its text kept.
+  assert.strictEqual(fs.readFileSync(codex, "utf8"), ins.POINTER + "\r\n\r\n# Codex\r\nUse tabs.\r\n");
+  assert.strictEqual(fs.readFileSync(droid, "utf8"), fs.readFileSync(codex, "utf8"));
+  assert.strictEqual(fs.statSync(codex).nlink, 2);
+  assert.strictEqual(fs.readFileSync(claude, "utf8"), ins.POINTER + "\n");
+  // Agents whose folder is not on this computer get no file.
+  assert.strictEqual(fs.existsSync(path.join(home, ".qwen")), false);
+  assert.strictEqual(fs.existsSync(path.join(home, ".gemini")), false);
+  // The changed file was kept in the trash first, marked as done by JMCP.
+  assert.deepStrictEqual(ins.trash(home).filter((t) => t.by === "jmcp").map((t) => t.path), [codex]);
+  assert.deepStrictEqual(ins.syncPointers(home), { changed: [], errors: [] });
+
+  // An agent rewrites its file without the line; the next session start puts it back.
+  ins.write(home, claude, "# Claude\n", { by: "agent", expectedHash: ins.read(claude, home).hash });
+  assert.deepStrictEqual(lines(claude), []);
+  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp, USERPROFILE: home, HOME: home } });
+  try {
+    await c.initialize("test");
+  } finally {
+    await c.close();
+  }
+  assert.strictEqual(fs.readFileSync(claude, "utf8"), ins.POINTER + "\n\n# Claude\n");
+
+  // Two copies, or an old version of the line, become one current line.
+  fs.writeFileSync(claude, "<!-- JMCP master instructions: old -->\n# Claude\n" + ins.POINTER + "\n");
+  assert.deepStrictEqual(ins.syncPointers(home).changed, [claude]);
+  assert.strictEqual(fs.readFileSync(claude, "utf8"), ins.POINTER + "\n\n# Claude\n");
+
+  // Deleting the master takes the line out again and leaves the rest.
+  const del = ins.remove(home, ins.masterPath(home), { by: "app" });
+  assert.deepStrictEqual(del.pointers.changed.sort(), [claude, codex].sort());
+  assert.strictEqual(fs.readFileSync(codex, "utf8"), "# Codex\r\nUse tabs.\r\n");
+  assert.strictEqual(fs.readFileSync(droid, "utf8"), "# Codex\r\nUse tabs.\r\n");
+  assert.strictEqual(fs.statSync(droid).nlink, 2);
+  assert.strictEqual(fs.readFileSync(claude, "utf8"), "# Claude\n");
+
+  // A file that only held the line is removed with it.
+  ins.write(home, ins.masterPath(home), "x", { by: "app", expectedHash: "" });
+  fs.writeFileSync(claude, ins.POINTER + "\n");
+  ins.remove(home, ins.masterPath(home), { by: "app" });
+  assert.strictEqual(fs.existsSync(claude), false);
+
+  // A server on another JMCP home with no master never removes lines.
+  fs.writeFileSync(claude, ins.POINTER + "\n");
+  assert.deepStrictEqual(ins.syncPointers(home, { addOnly: true }), { changed: [], errors: [] });
+  assert.strictEqual(fs.readFileSync(claude, "utf8"), ins.POINTER + "\n");
 });

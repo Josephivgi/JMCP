@@ -678,17 +678,27 @@ function saveFile() {
   const draft = sel.draft;
   insWork(() => api.instructions.write(file, draft, sel.exists ? sel.hash : ""), (r) => {
     if (sel && sel.path === file) Object.assign(sel, { exists: true, text: draft, hash: r.hash });
-    insLog = { ok: true, text: (r.created ? "Created " : r.changed ? "Saved " : "No changes in ") + file };
+    insLog = { ok: !(r.pointers && r.pointers.errors.length), text: (r.created ? "Created " : r.changed ? "Saved " : "No changes in ") + file + pointerNote(r.pointers) };
   });
 }
 
 function deleteFile() {
   const file = sel.path;
-  insWork(() => api.instructions.remove(file), () => {
+  insWork(() => api.instructions.remove(file), (r) => {
     insAsk = null;
     sel = null;
-    insLog = { ok: true, text: "Deleted " + file + ". You can restore it from Deleted and replaced." };
+    insLog = { ok: !(r.pointers && r.pointers.errors.length), text: "Deleted " + file + ". You can restore it from Deleted and replaced." + pointerNote(r.pointers) };
   });
+}
+
+// After a master instructions change: which agent files got or lost the
+// line that tells the agent to call master_instructions.
+function pointerNote(p) {
+  if (!p) return "";
+  const n = p.changed.length;
+  let text = n ? " Updated the master instructions line in " + n + " agent file" + (n === 1 ? "" : "s") + "." : "";
+  for (const e of p.errors) text += " Could not update " + e.path + ": " + e.error;
+  return text;
 }
 
 function addFolder(folder) {
@@ -890,7 +900,7 @@ function trashRow(t) {
   const open = trashView.has(t.id);
   const view = trashView.get(t.id);
   const forgetting = insAsk && insAsk.kind === "forget" && insAsk.id === t.id;
-  const who = t.by === "agent" ? "an agent" : t.by === "restore" ? "a restore" : "you";
+  const who = t.by === "agent" ? "an agent" : t.by === "restore" ? "a restore" : t.by === "jmcp" ? "JMCP (master instructions line)" : "you";
   return h("div", { class: "ins-trash-row" },
     h("div", { class: "ins-trash-top" },
       h("span", { class: "state " + (t.reason === "deleted" ? "bad" : "warn"), text: t.reason === "deleted" ? "Deleted" : "Replaced" }),
