@@ -78,12 +78,31 @@ function rulesFiles(home) {
   return entries.filter((e) => e.isFile() && /\.md$/i.test(e.name)).map((e) => path.join(dir, e.name)).sort();
 }
 
-// An absolute path whose name is one of NAMES, or a .md file directly in
-// ~/.claude/rules, or an error.
+// The user's master instructions: one file, edited in the app, that the
+// jmcp-instructions server gives every agent as instructions it must follow.
+function masterPath(home) {
+  return path.join(dbHome(home), "master-instructions.md");
+}
+
+function isMaster(file, home) {
+  return samePath(path.resolve(file), masterPath(home));
+}
+
+// The master text, or "" when it is not set.
+function master(home) {
+  const file = masterPath(home);
+  const s = stat(file);
+  if (!s || s.size > MAX_BYTES) return "";
+  return fs.readFileSync(file, "utf8").trim();
+}
+
+// An absolute path whose name is one of NAMES, a .md file directly in
+// ~/.claude/rules, or the master instructions file, or an error.
 function checkPath(file, home) {
   if (typeof file !== "string" || !file.trim()) throw new Error("path must not be empty.");
   if (!path.isAbsolute(file.trim())) throw new Error("path must be absolute.");
   const full = path.resolve(file.trim());
+  if (isMaster(full, home)) return masterPath(home);
   const name = NAMES.find((n) => samePath(n, path.basename(full)));
   if (name) return path.join(path.dirname(full), name);
   if (/^[^\\/]+\.md$/i.test(path.basename(full)) && samePath(path.dirname(full), rulesDir(home))) {
@@ -323,7 +342,7 @@ function detectFolders(home) {
 // Every agent's global file (made or not), then each saved folder (and an
 // extra folder, such as the agent's working folder) with the files it has.
 function list(home, extraFolder) {
-  const out = { agents: agentFiles(home).map((a) => info(a.file, { agent: a.agent })), rules: rulesFiles(home).map((f) => info(f)), folders: [] };
+  const out = { master: info(masterPath(home)), agents: agentFiles(home).map((a) => info(a.file, { agent: a.agent })), rules: rulesFiles(home).map((f) => info(f)), folders: [] };
   const seen = [];
   const add = (folder, saved) => {
     if (seen.some((f) => samePath(f, folder))) return;
@@ -368,6 +387,11 @@ function keep(home, db, file, reason, by) {
   return id;
 }
 
+// Only the user changes the master instructions, in the app.
+function notAgentOnMaster(file, home, by) {
+  if (by === "agent" && isMaster(file, home)) throw new Error("The master instructions are set by the user in the JMCP app. Agents can read them but not change or delete them.");
+}
+
 // Write the whole file. expectedHash (from read) refuses the write when the
 // file changed since it was read. Line endings follow the file being replaced.
 function write(home, file, text, opts) {
@@ -378,6 +402,7 @@ function write(home, file, text, opts) {
   const limit = opts && opts.restoring ? Infinity : MAX_BYTES;
   if (Buffer.byteLength(text) > limit) throw new Error("content is larger than 1 MB.");
   const by = (opts && opts.by) || "app";
+  notAgentOnMaster(file, home, by);
   return locked(home, (db) => {
     const before = stat(file) ? fs.readFileSync(file, "utf8") : null;
     const expected = opts && opts.expectedHash;
@@ -408,8 +433,9 @@ function write(home, file, text, opts) {
 function remove(home, file, opts) {
   file = checkPath(file, home);
   checkLink(file, home);
-  if (!stat(file)) throw new Error("No file at " + file + ".");
   const by = (opts && opts.by) || "app";
+  notAgentOnMaster(file, home, by);
+  if (!stat(file)) throw new Error("No file at " + file + ".");
   return locked(home, (db) => {
     if (!stat(file)) throw new Error("No file at " + file + ".");
     const id = keep(home, db, file, "deleted", by);
@@ -450,4 +476,4 @@ function forget(home, id) {
   });
 }
 
-module.exports = { NAMES, agentFiles, rulesDir, rulesFiles, checkPath, folders, addFolder, removeFolder, detectFolders, hiddenFolders, list, read, write, remove, trash, trashText, restore, forget, hash };
+module.exports = { NAMES, masterPath, master, agentFiles, rulesDir, rulesFiles, checkPath, folders, addFolder, removeFolder, detectFolders, hiddenFolders, list, read, write, remove, trash, trashText, restore, forget, hash };

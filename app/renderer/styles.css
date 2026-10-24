@@ -315,6 +315,9 @@ textarea.lib-input.mono { font-size: 12.5px; line-height: 1.55; }
 /* ---------- Instructions ---------- */
 .ins-grid { display: grid; grid-template-columns: minmax(290px, 370px) minmax(0, 1fr); gap: 18px; align-items: start; }
 .ins-files { position: sticky; top: 0; display: flex; flex-direction: column; max-height: max(420px, calc(100vh - 224px)); overflow: hidden; }
+.ins-master { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.ins-master .ins-name { font-weight: 600; }
+.ins-master .ins-file.missing .ins-name { color: var(--ink); font-weight: 600; }
 .ins-tabs { padding: 10px; border-bottom: 1px solid var(--line); }
 .ins-tabs .seg { display: flex; }
 .ins-tabs .seg-btn { flex: 1 1 0; justify-content: center; }

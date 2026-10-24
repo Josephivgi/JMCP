@@ -43,6 +43,11 @@ delete them. Deleted and overwritten files are kept so you can restore them.
 Installed agents get `list`, `read`, `write` and `delete` tools for the same
 files. See [servers/instructions](servers/instructions/README.md).
 
+**Master instructions** is one file at the top of the Instructions page. Every
+agent with jmcp-instructions gets it when its session starts, labeled as
+master instructions it must follow, and can read the latest text with the
+`master_instructions` tool. Only the app can change it.
+
 ## jmcp-memory
 
 Memory shared by every agent. What one agent saves (a preference, a decision,

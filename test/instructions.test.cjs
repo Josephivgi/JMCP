@@ -109,7 +109,7 @@ test("stdio server lists, reads, writes and deletes", async () => {
     assert.strictEqual(init.serverInfo.name, "jmcp-instructions");
     assert.match(init.instructions, /AGENTS\.md/);
     const { tools } = await c.request("tools/list");
-    assert.deepStrictEqual(tools.map((t) => t.name), ["list", "read", "write", "delete"]);
+    assert.deepStrictEqual(tools.map((t) => t.name), ["master_instructions", "list", "read", "write", "delete"]);
     assert.match((await c.callTool("list", { folder: project })).text, /no instruction files/);
     const made = await c.callTool("write", { path: file, content: "# Proj\n", hash: "" });
     assert.strictEqual(made.isError, false);
@@ -230,4 +230,79 @@ test("trash ids are checked, large deletes can be restored, CRLF growth is count
   fs.writeFileSync(crlf, "a\r\nb\r\n");
   const h = ins.read(crlf).hash;
   assert.throws(() => ins.write(home, crlf, "\n".repeat(600000), { expectedHash: h }), /once its line endings match/);
+});
+
+test("master instructions: the app sets them, agents get them labeled and cannot change them", async () => {
+  const home = scratch();
+  const jmcp = path.join(home, ".jmcp");
+  const file = ins.masterPath(home);
+  assert.strictEqual(file, path.join(jmcp, "master-instructions.md"));
+  assert.strictEqual(ins.list(home).master.exists, false);
+  assert.strictEqual(ins.master(home), "");
+
+  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp } });
+  try {
+    // Not set: no master block, and the tool says so.
+    assert.doesNotMatch((await c.initialize("test")).instructions, /MASTER INSTRUCTIONS/);
+    assert.match((await c.callTool("master_instructions", {})).text, /not set master instructions/);
+    // An agent cannot create it.
+    const made = await c.callTool("write", { path: file, content: "agent text", hash: "" });
+    assert.strictEqual(made.isError, true);
+    assert.match(made.text, /set by the user in the JMCP app/);
+    assert.ok(!fs.existsSync(file));
+  } finally {
+    await c.close();
+  }
+
+  // The app sets them; replacing keeps the old copy in the trash.
+  ins.write(home, file, "Always answer in English.\n", { by: "app", expectedHash: "" });
+  const first = ins.read(file, home);
+  ins.write(home, file, "Always answer in English.\nNever push to main.\n", { by: "app", expectedHash: first.hash });
+  assert.strictEqual(ins.master(home), "Always answer in English.\nNever push to main.");
+  assert.strictEqual(ins.list(home).master.exists, true);
+  assert.deepStrictEqual(ins.trash(home).map((t) => [t.path, t.reason]), [[file, "replaced"]]);
+
+  const d = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp } });
+  try {
+    const init = await d.initialize("test");
+    assert.match(init.instructions, /^MASTER INSTRUCTIONS\nThe user set these master instructions in JMCP. You must follow them in every task./);
+    assert.match(init.instructions, /Never push to main.\nEND OF MASTER INSTRUCTIONS\n\nUse these tools/);
+    const tool = await d.callTool("master_instructions", {});
+    assert.strictEqual(tool.isError, false);
+    assert.match(tool.text, /^MASTER INSTRUCTIONS[^]*Never push to main.[^]*END OF MASTER INSTRUCTIONS$/);
+    // Agents can read it with read, but not replace or delete it.
+    const read = await d.callTool("read", { path: file });
+    assert.match(read.text, /Never push to main/);
+    const hash = read.text.match(/Hash: (\w+)/)[1];
+    assert.strictEqual((await d.callTool("write", { path: file, content: "changed", hash })).isError, true);
+    assert.strictEqual((await d.callTool("delete", { path: file })).isError, true);
+    assert.match(fs.readFileSync(file, "utf8"), /Never push to main/);
+    assert.match((await d.callTool("list", {})).text, /^Master instructions \(set by the user in the JMCP app, read-only for agents\): /);
+
+    // A change made in the app reaches the running server through the tool.
+    ins.write(home, file, "Use tabs.\n", { by: "app", expectedHash: ins.read(file, home).hash });
+    assert.match((await d.callTool("master_instructions", {})).text, /Use tabs./);
+  } finally {
+    await d.close();
+  }
+
+  // Very long text is cut in the server instructions, never in the tool.
+  const long = "rule ".repeat(10000) + "LAST";
+  ins.write(home, file, long, { by: "app", expectedHash: ins.read(file, home).hash });
+  const e = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp } });
+  try {
+    const init = await e.initialize("test");
+    assert.match(init.instructions, /Cut here. Call the master_instructions tool for the rest./);
+    assert.doesNotMatch(init.instructions, /LAST/);
+    assert.match((await e.callTool("master_instructions", {})).text, /LAST\nEND OF MASTER INSTRUCTIONS$/);
+  } finally {
+    await e.close();
+  }
+
+  // The app can delete it and restore it from the trash.
+  ins.remove(home, file, { by: "app" });
+  assert.strictEqual(ins.master(home), "");
+  const del = ins.trash(home).find((t) => t.reason === "deleted");
+  ins.restore(home, del.id);
+  assert.match(ins.master(home), /LAST$/);
 });

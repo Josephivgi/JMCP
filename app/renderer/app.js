@@ -764,6 +764,18 @@ function loadDetected() {
     .finally(() => { detectLoading = null; render(); });
 }
 
+const MASTER = "Master instructions";
+
+// The one file every agent gets as instructions it must follow.
+function masterRow() {
+  if (!ins.master) return null;
+  return h("div", { class: "ins-master" }, fileRow(ins.master, MASTER, "Every agent must follow these"));
+}
+
+function isMasterSel() {
+  return Boolean(sel && ins && ins.master && sel.path === ins.master.path);
+}
+
 function filesPanel() {
   loadDetected();
   const q = projQ.trim().toLowerCase();
@@ -775,6 +787,7 @@ function filesPanel() {
   const tabs = h("div", { class: "ins-tabs" }, seg("Show", [["agents", "Agent files", made + "/" + ins.agents.length], ["projects", "Projects", ins.folders.length + (detected ? foundAll.length : 0)]], insTab, "ins-tab", (t) => { insTab = t; render(); }));
   if (insTab === "agents") {
     return h("section", { class: "panel ins-files" },
+      masterRow(),
       tabs,
       h("div", { class: "ins-scroll" },
         h("p", { class: "hint ins-lead", text: "Each agent reads its own file in every session. Pick one to read or edit it." }),
@@ -783,6 +796,7 @@ function filesPanel() {
     );
   }
   return h("section", { class: "panel ins-files" },
+    masterRow(),
     tabs,
     h("div", { class: "ins-scroll" },
     h("div", { class: "ins-head ins-head-split" },
@@ -826,6 +840,7 @@ function editorPanel() {
   setStatus();
   const deleting = insAsk && insAsk.kind === "delete";
   const opening = insAsk && insAsk.kind === "open";
+  const masterOpen = isMasterSel();
   return h("section", { class: "panel ins-editor" },
     h("div", { class: "ins-editor-head" },
       h("div", { class: "grow ins-title" }, h("h2", { text: sel.label }), h("span", { class: "mono note", title: sel.path, text: sel.path })),
@@ -835,7 +850,7 @@ function editorPanel() {
       ),
     ),
     deleting ? h("div", { class: "warn-box", role: "alertdialog", "aria-label": "Delete file" },
-      h("p", { text: "Delete " + sel.path + "? Agents stop reading it. You can restore it from Deleted and replaced." }),
+      h("p", { text: (masterOpen ? "Delete the master instructions? Agents stop getting them." : "Delete " + sel.path + "? Agents stop reading it.") + " You can restore it from Deleted and replaced." }),
       h("div", { class: "row-actions" },
         h("button", { class: "btn danger", disabled: busy, onclick: deleteFile }, "Delete file"),
         h("button", { class: "btn", disabled: busy, onclick: () => { insAsk = null; render(); } }, "Cancel"),
@@ -848,6 +863,7 @@ function editorPanel() {
         h("button", { class: "btn", "data-focus-key": "ins-keep", onclick: () => { insAsk = null; render(); focusLater("ins-text"); } }, "Keep editing"),
       ),
     ) : null,
+    masterOpen ? h("p", { class: "note", text: "Every agent with jmcp-instructions gets this text as master instructions it must follow. Agents can read it but not change it. Running agents see changes when they call master_instructions or start a new session." }) : null,
     sel.loading ? h("div", { class: "empty", text: "Loading files…" })
       : sel.error ? h("div", { class: "error-box", role: "alert", text: sel.error })
       : h("textarea", {
@@ -855,7 +871,7 @@ function editorPanel() {
           spellcheck: "false",
           "aria-label": "File text",
           "data-focus-key": "ins-text",
-          placeholder: "# Agent instructions\n\nWhat agents should know and do.",
+          placeholder: masterOpen ? "What every agent must always do or never do." : "# Agent instructions\n\nWhat agents should know and do.",
           oninput: (e) => { sel.draft = e.target.value; setStatus(); },
           onkeydown: (e) => { if (e.key === "s" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveFile(); } },
         }, sel.draft),
@@ -930,10 +946,10 @@ function instructionsPage() {
     insLoading = fetchIns().finally(() => { insLoading = null; render(); });
   }
   return h("div", { class: "page" },
-    head("Instructions", "AGENTS.md, CLAUDE.md and the other instruction files your agents read.", [
+    head("Instructions", "Master instructions for every agent, plus AGENTS.md, CLAUDE.md and the other files your agents read.", [
       h("button", { class: "btn", disabled: busy, onclick: () => { detected = null; insWork(async () => {}); } }, "Refresh"),
     ]),
-    serverStrip("instructions", "With it, you can ask any agent to read, edit, create or delete these files."),
+    serverStrip("instructions", "With it, every agent gets your master instructions, and you can ask any agent to read, edit, create or delete these files."),
     insError ? h("div", { class: "error-box", role: "alert", text: insError }) : null,
     insLog ? h("div", { class: insLog.ok ? "ok-box" : "error-box", role: "status" }, h("span", { text: insLog.text }), h("button", { class: "btn small quiet", "aria-label": "Dismiss", onclick: () => { insLog = null; render(); } }, "Dismiss")) : null,
     !ins ? h("div", { class: "panel empty", text: "Loading files…" }) : h("div", { class: "ins-grid" }, filesPanel(), editorPanel()),

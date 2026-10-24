@@ -4,8 +4,19 @@ MCP server for agent instruction files: `AGENTS.md`, `CLAUDE.md`,
 `CLAUDE.local.md`, `GEMINI.md` and `QWEN.md`. Install it into an agent with
 JMCP and the agent can manage those files when you ask it to.
 
+Master instructions: one file, `~/.jmcp/master-instructions.md`, that you edit
+on the Instructions page of the JMCP app. When an agent starts a session, the
+server gives it this text in its instructions, labeled `MASTER INSTRUCTIONS`
+with a line saying the agent must follow it in every task. Text over 32 KB is
+cut there, with a note to call the tool for the rest. Agents can read it but
+never change or delete it.
+
 Tools:
 
+- `master_instructions`: the current master instructions, in full, with the
+  same label. Agents are told to call it at the start of every task, since
+  some agents ignore server instructions and the text may have changed since
+  the session started.
 - `list`: each agent's global file (for example `~/.codex/AGENTS.md` and
   `~/.claude/CLAUDE.md`), made or not, Claude Code's rule files in
   `~/.claude/rules`, every project folder saved in JMCP, and project folders
