@@ -60,6 +60,27 @@ function bodyValue(body) {
   return body.trim();
 }
 
+// Things that look like keys, tokens or passwords. Memories are plain text
+// every agent reads, so agents must not put secrets in them.
+const SECRETS = [
+  [/-----BEGIN [A-Z ]*PRIVATE KEY-----/, "a private key"],
+  [/\bsk-(?:ant-|proj-|live-|test-)?[A-Za-z0-9_-]{20,}/, "an API key (sk-...)"],
+  [/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{40,}/, "a GitHub token"],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/, "an AWS access key"],
+  [/\bAIza[0-9A-Za-z_-]{35}\b/, "a Google API key"],
+  [/\bxox[abprs]-[A-Za-z0-9-]{10,}/, "a Slack token"],
+  [/\b(?:sk|rk)_live_[A-Za-z0-9]{20,}/, "a Stripe key"],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/, "a JWT"],
+  [/\b(?:password|passwd|pwd)\b\s*[:=]\s*["']?(?!(?:none|null|empty|unset|required|redacted|hidden|changeme)\b|<|\*+|x{3,})[^\s"']{4,}/i, "a password"],
+  [/\b(?:secret|api[_-]?key|access[_-]?token|auth[_-]?token)\b\s*[:=]\s*["']?[^\s"']{8,}/i, "a secret or key value"],
+];
+
+// The kind of secret found in text, or "".
+function findSecret(text) {
+  for (const [re, what] of SECRETS) if (re.test(String(text || ""))) return what;
+  return "";
+}
+
 function tagsValue(tags) {
   if (tags === undefined || tags === null) return [];
   const list = Array.isArray(tags) ? tags : String(tags).split(",");
@@ -75,8 +96,16 @@ function list(home) {
   return withDb(home, (db) => db.prepare("SELECT * FROM memories ORDER BY updated_at DESC, name").all().map(row));
 }
 
-function get(home, ref) {
-  return withDb(home, (db) => row(db.prepare("SELECT * FROM memories WHERE id = ? OR name = ?").get(String(ref), slug(ref))));
+// One memory. Agents name memories, so opts.byName looks at names only;
+// the app passes ids. Without it: by id, else by name, never both.
+function find(db, ref, opts) {
+  const byName = () => db.prepare("SELECT * FROM memories WHERE name = ?").get(slug(ref));
+  if (opts && opts.byName) return byName();
+  return db.prepare("SELECT * FROM memories WHERE id = ?").get(String(ref)) || byName();
+}
+
+function get(home, ref, opts) {
+  return withDb(home, (db) => row(find(db, ref, opts)));
 }
 
 // Create, or replace the memory with the same name. Returns {memory, created}.
@@ -87,16 +116,29 @@ function save(home, { name, title, body, tags, author } = {}) {
   const tagList = JSON.stringify(tagsValue(tags));
   const who = String(author || "JMCP app").slice(0, 80);
   return withDb(home, (db) => {
-    const now = Date.now();
-    const old = db.prepare("SELECT id FROM memories WHERE name = ?").get(key);
-    if (old) {
-      db.prepare("UPDATE memories SET title = ?, body = ?, tags = ?, author = ?, updated_at = ? WHERE id = ?").run(title, body, tagList, who, now, old.id);
-      return { memory: row(db.prepare("SELECT * FROM memories WHERE id = ?").get(old.id)), created: false };
+    // Immediate, so two agents saving the same new name cannot both insert.
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const out = upsert(db, key, title, body, tagList, who);
+      db.exec("COMMIT");
+      return out;
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
     }
-    const id = crypto.randomUUID();
-    db.prepare("INSERT INTO memories (id, name, title, body, tags, author, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, key, title, body, tagList, who, now, now);
-    return { memory: row(db.prepare("SELECT * FROM memories WHERE id = ?").get(id)), created: true };
   });
+}
+
+function upsert(db, key, title, body, tagList, who) {
+  const now = Date.now();
+  const old = db.prepare("SELECT id FROM memories WHERE name = ?").get(key);
+  if (old) {
+    db.prepare("UPDATE memories SET title = ?, body = ?, tags = ?, author = ?, updated_at = ? WHERE id = ?").run(title, body, tagList, who, now, old.id);
+    return { memory: row(db.prepare("SELECT * FROM memories WHERE id = ?").get(old.id)), created: false };
+  }
+  const id = crypto.randomUUID();
+  db.prepare("INSERT INTO memories (id, name, title, body, tags, author, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(id, key, title, body, tagList, who, now, now);
+  return { memory: row(db.prepare("SELECT * FROM memories WHERE id = ?").get(id)), created: true };
 }
 
 // Edit by id from the app. A new name must not belong to another memory.
@@ -118,8 +160,11 @@ function update(home, id, patch) {
   });
 }
 
-function remove(home, ref) {
-  return withDb(home, (db) => db.prepare("DELETE FROM memories WHERE id = ? OR name = ?").run(String(ref), slug(ref)).changes > 0);
+function remove(home, ref, opts) {
+  return withDb(home, (db) => {
+    const m = find(db, ref, opts);
+    return m ? db.prepare("DELETE FROM memories WHERE id = ?").run(m.id).changes > 0 : false;
+  });
 }
 
 // Every word must appear in the name, title, body or tags. Title and tag
@@ -153,4 +198,4 @@ function index(memories, max) {
   return lines.join("\n");
 }
 
-module.exports = { list, get, save, update, remove, search, index, slug, MAX_BODY };
+module.exports = { list, get, save, update, remove, search, index, slug, findSecret, MAX_BODY };

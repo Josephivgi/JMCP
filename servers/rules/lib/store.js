@@ -34,8 +34,13 @@ function kindValue(kind) {
   return kind;
 }
 
+// Every rule goes into every agent's instructions, so each stays short.
+const MAX_RULE = 2000;
+const MAX_TOTAL = 40000;
+
 function textValue(text) {
   if (typeof text !== "string" || !text.trim()) throw new Error("text must not be empty.");
+  if (text.trim().length > MAX_RULE) throw new Error("A rule can be at most " + MAX_RULE + " characters. Split it into shorter rules, or put long guidance in a skill or an instruction file.");
   return text.trim();
 }
 
@@ -100,7 +105,9 @@ function instructions(rules) {
     const items = rules.filter((rule) => rule.kind === kind).map((rule) => "- " + rule.text);
     return items.length ? title + "\n" + items.join("\n") : "";
   };
-  return [section("Do:", "do"), section("Don't:", "dont")].filter(Boolean).join("\n\n");
+  const text = [section("Do:", "do"), section("Don't:", "dont")].filter(Boolean).join("\n\n");
+  // Rules saved before the per-rule limit can still add up; agents get a cut.
+  return text.length > MAX_TOTAL ? text.slice(0, MAX_TOTAL) + "\n\n(The rules go on but were cut at " + MAX_TOTAL + " characters. Shorten them in the JMCP app.)" : text;
 }
 
 module.exports = { list, add, update, remove, active, instructions };

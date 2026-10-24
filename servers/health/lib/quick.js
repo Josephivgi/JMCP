@@ -247,6 +247,9 @@ async function sshInventory(home) {
 // Small read-only script for a Linux host: OS, uptime, CPU, memory, disks,
 // failed services and pending reboot. Runs in a second or two.
 const HOST_SH = [
+  // apt's "upgradable" and "Inst" lines are matched below, so its messages
+  // must not be translated.
+  "export LC_ALL=C LANG=C",
   "echo \"os=$( (. /etc/os-release 2>/dev/null && echo \"$PRETTY_NAME\") || uname -s)\"",
   "echo \"kernel=$(uname -r)\"",
   "echo \"host=$(hostname)\"",
@@ -266,6 +269,8 @@ const HOST_SH = [
     "echo \"pkgs=$(printf '%s' \"$L\" | cut -d/ -f1 | head -60 | tr '\\n' ' ')\"; echo \"listed=$(stat -c %Y /var/lib/apt/lists/partial 2>/dev/null)\"; " +
     "elif command -v dnf >/dev/null 2>&1; then echo pm=dnf; L=$(dnf -q -C check-update 2>/dev/null | awk 'NF==3{print $1}'); " +
     "echo \"upd=$(printf '%s' \"$L\" | grep -c .)\"; echo \"pkgs=$(printf '%s' \"$L\" | head -60 | tr '\\n' ' ')\"; fi",
+  // Last line: a check cut off part way is reported as failed, not healthy.
+  "echo jmcp_done=1",
 ].join("\n") + "\n";
 
 function parseHost(out) {
@@ -286,7 +291,9 @@ function parseHost(out) {
     r.load = v.load.split(/\s+/).map(Number);
     if (r.cpus) r.loadPct = Math.round((100 * r.load[0]) / r.cpus);
   }
-  const ticks = (s) => (s || "").split(/\s+/).slice(1).map(Number);
+  // /proc/stat: user nice system idle iowait irq softirq steal guest
+  // guest_nice. guest and guest_nice are already counted in user and nice.
+  const ticks = (s) => (s || "").split(/\s+/).slice(1, 9).map(Number);
   const a = ticks(v.stat1);
   const b = ticks(v.stat2);
   if (a.length >= 4 && b.length >= 4) {
@@ -305,7 +312,8 @@ function parseHost(out) {
       const t = Number(total);
       return { mount, totalGB: Math.round(t / 1048576 * 10) / 10, freeGB: Math.round(Number(free) / 1048576 * 10) / 10, usedPct: t ? Math.round(100 * (1 - Number(free) / t)) : null };
     })
-    .filter((d) => d.mount && d.totalGB >= 1);
+    // Small partitions count too: a full /boot blocks kernel updates.
+    .filter((d) => d.mount && d.totalGB >= 0.05);
   r.failed = (v.failed || "").split(/\s+/).filter(Boolean);
   r.rebootNeeded = v.reboot === "yes";
   if (v.docker) {
@@ -365,7 +373,11 @@ async function checkHost(name, home, timeoutMs) {
   const started = Date.now();
   const r = await run("ssh", args, HOST_SH, timeoutMs || 25000);
   const ms = Date.now() - started;
-  if (r.code !== 0 && !/os=/.test(r.out)) return { name: alias, ok: false, checkedAt: Date.now(), ms, error: sshError(r.err || (r.code === -1 ? "timed out" : "")) };
+  if (!/^jmcp_done=1\r?$/m.test(r.out)) {
+    if (!/os=/.test(r.out)) return { name: alias, ok: false, checkedAt: Date.now(), ms, error: sshError(r.err || (r.code === -1 ? "timed out" : "")) };
+    const last = (r.err || "").trim().split(/\r?\n/).pop() || "";
+    return { name: alias, ok: false, checkedAt: Date.now(), ms, error: "The check stopped part way" + (r.code === -1 ? " (timed out)" : " (exit " + r.code + ")") + ", so its results are not shown." + (last ? " " + last : "") };
+  }
   const facts = parseHost(r.out);
   return Object.assign({ name: alias, ok: true, checkedAt: Date.now(), ms }, facts, { problems: hostProblems(facts) });
 }
@@ -469,6 +481,7 @@ async function localNow(opts) {
 function updateScript(simulate) {
   return [
     "set -e",
+    "export LC_ALL=C LANG=C",
     "if [ \"$(id -u)\" = 0 ]; then S=''; elif sudo -n true 2>/dev/null; then S='sudo -n'; else echo 'JMCP: this login is not root and has no passwordless sudo.' >&2; exit 3; fi",
     // Proxmox hosts must use dist-upgrade (its kernels come in as new packages).
     // Elsewhere --with-new-pkgs installs updates that pull in a new package
@@ -476,13 +489,23 @@ function updateScript(simulate) {
     "if command -v pveversion >/dev/null 2>&1; then M=dist-upgrade; else M='upgrade --with-new-pkgs'; fi",
     // Ubuntu holds back phased updates that apt list --upgradable still shows,
     // so without this they never clear from the count.
-    "P='-o APT::Get::Always-Include-Phased-Updates=true'",
+    // --no-remove makes apt stop instead of removing anything to solve a conflict.
+    "P='--no-remove -o APT::Get::Always-Include-Phased-Updates=true'",
     "if command -v apt-get >/dev/null 2>&1; then",
     simulate
       ? "  apt-get -s -q $P $M </dev/null"
       : "  $S apt-get update -q </dev/null\n  $S env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get -y -q $P -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold $M </dev/null",
     "elif command -v dnf >/dev/null 2>&1; then",
-    simulate ? "  dnf -q -C --assumeno upgrade </dev/null || true" : "  $S dnf -y -q upgrade </dev/null",
+    // dnf -q prints no summary, so count changed packages from rpm before and
+    // after. obsoletes=0 and installonly_limit=0 stop dnf removing replaced
+    // packages and old kernels, so like apt it removes nothing.
+    "  D='--setopt=obsoletes=0 --setopt=installonly_limit=0'",
+    simulate
+      // --assumeno always exits non-zero, so a failed resolve shows as Error lines.
+      ? "  O=$(dnf -C $D --assumeno upgrade </dev/null 2>&1) || true\n" +
+        "  if printf '%s\\n' \"$O\" | grep -q '^Error'; then printf '%s\\n' \"$O\" | grep -A5 '^Error' | sed 's/^/JMCP: /' >&2; exit 5; fi\n" +
+        "  printf '%s\\n' \"$O\" | awk '/^(Upgrading|Installing)/{on=1;next} /^[A-Z]/{on=0} on&&NF==1{n=$1;next} on&&NF>=4{print \"Plan \" (n?n:$1); n=\"\"}'"
+      : "  T=$(mktemp)\n  rpm -qa | sort > \"$T\"\n  $S dnf -y -q $D upgrade </dev/null\n  echo \"JMCP_CHANGED=$(rpm -qa | sort | comm -13 \"$T\" - | wc -l)\"\n  rm -f \"$T\"",
     "else echo 'JMCP: no apt-get or dnf on this host.' >&2; exit 4; fi",
     "echo \"JMCP_DONE reboot=$([ -f /var/run/reboot-required ] && echo yes || echo no)\"",
   ].join("\n") + "\n";
@@ -504,12 +527,16 @@ async function applyUpdates(name, home, opts) {
   const tail = log.split(/\r?\n/).filter((l) => l.trim() && !/^JMCP_DONE/.test(l)).slice(-40).join("\n");
   const done = r.out.match(/JMCP_DONE reboot=(yes|no)/);
   if (!done) {
-    const why = /JMCP: (.*)/.exec(log);
-    return { name: alias, ok: false, simulate, ms: Date.now() - started, error: why ? why[1] : r.code === -1 ? "Timed out after " + Math.round(((opts && opts.timeoutMs) || 1200000) / 60000) + " minutes." : sshError(r.err || "exit " + r.code), log: tail };
+    const why = (log.match(/^JMCP: .*$/gm) || []).map((l) => l.slice(6).trim()).filter(Boolean).join(" ");
+    return { name: alias, ok: false, simulate, ms: Date.now() - started, error: why ? why : r.code === -1 ? "Timed out after " + Math.round(((opts && opts.timeoutMs) || 1200000) / 60000) + " minutes." : sshError(r.err || "exit " + r.code), log: tail };
   }
   const counted = r.out.match(/(\d+) upgraded, (\d+) newly installed/);
-  const installed = counted ? Number(counted[1]) + Number(counted[2]) : (r.out.match(/^(Inst|Setting up) /gm) || []).length;
-  return { name: alias, ok: true, simulate, ms: Date.now() - started, rebootNeeded: done[1] === "yes", installed, log: tail };
+  const changed = r.out.match(/^JMCP_CHANGED=\s*(\d+)/m);
+  const installed = counted ? Number(counted[1]) + Number(counted[2]) : changed ? Number(changed[1]) : (r.out.match(/^(Inst|Setting up) /gm) || []).length;
+  // Every package a dry run would install, from the whole output, not the
+  // shortened log.
+  const planned = simulate ? (r.out.match(/^(?:Inst|Plan) \S+/gm) || []).map((l) => l.slice(5)) : undefined;
+  return { name: alias, ok: true, simulate, ms: Date.now() - started, rebootNeeded: done[1] === "yes", installed, planned, log: tail };
 }
 
 module.exports = { sshConfig, sshInventory, keyInfo, checkHost, applyUpdates, updateScript, parseHost, hostProblems, localNow, describeBlob, parsePrivate, HOST_SH };

@@ -13,6 +13,7 @@ const hl = {
   open: new Set(), // open <details> keys, kept across re-renders
   upd: new Map(), // host -> {asking} | {running, started} | {result}
   updAllAsk: false,
+  updBatch: false,
   timer: null, ticks: 0, started: false,
 };
 
@@ -323,7 +324,7 @@ function updatable() {
   return hl.ssh.hosts.filter((x) => {
     const r = hl.hosts.get(x.name);
     const u = hl.upd.get(x.name);
-    return r && r.ok && r.updates && r.updates.count > 0 && r.updates.canApply && !(u && u.running);
+    return r && r.ok && r.updates && r.updates.count > 0 && r.updates.canApply && !(u && (u.running || u.queued));
   });
 }
 
@@ -347,12 +348,21 @@ async function applyUpdates(name) {
 // there does not cut off the others mid-way.
 async function applyAll() {
   hl.updAllAsk = false;
+  // One batch at a time: a second batch would update its hosts while the
+  // first is mid-way, and jump hosts out of order.
+  if (hl.updBatch) return;
   const list = updatable();
   const jumps = new Set(hl.ssh.hosts.map((x) => x.via).filter(Boolean));
   list.sort((a, b) => jumps.has(a.name) - jumps.has(b.name));
   for (const x of list) hl.upd.set(x.name, { queued: true });
+  hl.updBatch = true;
   render();
-  for (const x of list) await applyUpdates(x.name);
+  try {
+    for (const x of list) await applyUpdates(x.name);
+  } finally {
+    hl.updBatch = false;
+    render();
+  }
 }
 
 function updatesBlock(host, r) {

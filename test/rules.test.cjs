@@ -121,8 +121,17 @@ test("stdio server returns all rules on initialize and reads changes on each cal
     assert.match(after.text, /- Check new rules/);
     rules.update(home, added.id, { enabled: false });
     assert.ok(!(await c.callTool("rules")).text.includes("Check new rules"));
-    assert.strictEqual((await c.callTool("nope")).isError, true);
+    await assert.rejects(c.callTool("nope"), /Unknown tool nope/);
   } finally {
     await c.close();
   }
+});
+
+test("rules are short, and the text agents get is bounded", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "jmcp-rules-cap-"));
+  assert.throws(() => rules.add(home, { kind: "do", text: "x".repeat(2001) }), /at most 2000/);
+  for (let i = 0; i < 30; i++) rules.add(home, { kind: "do", text: "rule " + i + " " + "y".repeat(1900) });
+  const text = rules.instructions(rules.active(home));
+  assert.ok(text.length < 41000, "length " + text.length);
+  assert.match(text, /were cut at 40000/);
 });

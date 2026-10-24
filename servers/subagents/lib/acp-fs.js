@@ -19,16 +19,59 @@ async function readTextFile(params, cwd) {
   if (!stat.isFile()) throw new Error("not a regular file");
   const line = params && typeof params.line === "number" && params.line >= 0 ? Math.floor(params.line) : null;
   const limit = params && typeof params.limit === "number" && params.limit >= 0 ? Math.floor(params.limit) : null;
-  // A paged read still bounds the response: READ_MAX bytes of whole file is
-  // one thing; slicing only needs enough headroom for the requested span.
-  if (stat.size > READ_MAX && !(line != null || limit != null)) throw new Error("file is too large to read");
-  const content = await fs.promises.readFile(file, "utf8");
-  if (line == null && limit == null) return { content };
-  // ACP counts lines 1-based; slice [line, line + limit).
-  const lines = content.split("\n");
+  if (line == null && limit == null) {
+    if (stat.size > READ_MAX) throw new Error("file is too large to read");
+    return { content: await fs.promises.readFile(file, "utf8") };
+  }
+  // ACP counts lines 1-based; return [line, line + limit). A paged read of a
+  // big file streams and stops at the last wanted line, and the reply stays
+  // under READ_MAX however long the lines are.
   const start = line == null ? 0 : Math.max(0, line - 1);
-  const end = limit == null ? lines.length : start + limit;
-  return { content: lines.slice(start, end).join("\n") };
+  const end = limit == null ? Infinity : start + limit;
+  return { content: await readLines(file, start, end) };
+}
+
+function readLines(file, start, end) {
+  return new Promise((resolve, reject) => {
+    const stream = fs.createReadStream(file, { encoding: "utf8" });
+    const out = [];
+    let size = 0;
+    let n = 0;
+    let rest = "";
+    let done = false;
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      stream.destroy();
+      if (err) reject(err);
+      else resolve(out.join("\n"));
+    };
+    const take = (text) => {
+      if (n >= start && n < end) {
+        size += Buffer.byteLength(text, "utf8") + 1;
+        if (size > READ_MAX) return finish(new Error("the requested lines are too large to read; ask for fewer"));
+        out.push(text);
+      }
+      n++;
+      if (n >= end) finish();
+    };
+    stream.on("data", (chunk) => {
+      const parts = (rest + chunk).split("\n");
+      rest = parts.pop();
+      // A single line longer than READ_MAX cannot fit in any reply.
+      if (rest.length > READ_MAX && n >= start && n < end) return finish(new Error("the requested lines are too large to read; ask for fewer"));
+      if (rest.length > READ_MAX) rest = "";
+      for (const p of parts) {
+        take(p);
+        if (done) return;
+      }
+    });
+    stream.on("end", () => {
+      take(rest);
+      finish();
+    });
+    stream.on("error", finish);
+  });
 }
 
 async function writeTextFile(params, cwd) {

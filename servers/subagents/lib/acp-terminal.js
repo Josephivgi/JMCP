@@ -149,7 +149,7 @@ function createTerminalHub() {
     byId.clear();
   }
 
-  return { handle, snapshot, clear, allocate, row, has: (id) => byId.has(String(id || "")) };
+  return { handle, snapshot, clear, allocate, row, release: (id) => byId.delete(String(id || "")), has: (id) => byId.has(String(id || "")) };
 }
 
 module.exports = { createTerminalHub };

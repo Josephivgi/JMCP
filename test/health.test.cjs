@@ -115,10 +115,21 @@ test("MCP server lists its tools and rejects bad targets", async () => {
     const init = await c.initialize("test");
     assert.strictEqual(init.serverInfo.name, "jmcp-health");
     const { tools } = await c.request("tools/list");
-    assert.deepStrictEqual(tools.map((t) => t.name), ["targets", "problems", "slow_text", "glitchy", "show_user"]);
+    assert.deepStrictEqual(tools.map((t) => t.name), ["targets", "problems", "slow_text", "glitchy", "updates", "show_user"]);
     const r = await c.request("tools/call", { name: "problems", arguments: { target: "-oX" } });
     assert.strictEqual(r.isError, true);
+    const u = await c.request("tools/call", { name: "updates", arguments: { target: "not-a-configured-host", install: true } });
+    assert.strictEqual(u.isError, true);
+    assert.match(u.content[0].text, /Unknown host/);
   } finally {
     c.close();
   }
+});
+
+test("only a disk that says Healthy counts as healthy", () => {
+  const { analyze } = require("../servers/health/lib/analyze.js");
+  const bad = analyze({ os: "windows", physicalDisks: [{ name: "Disk 0", health: "Unhealthy", media: "SSD", bus: "NVMe" }] });
+  assert.ok(bad.some((p) => /reports Unhealthy/.test(p.title)));
+  const good = analyze({ os: "windows", physicalDisks: [{ name: "Disk 0", health: "Healthy", media: "SSD", bus: "NVMe" }] });
+  assert.ok(!good.some((p) => /reports/.test(p.title)));
 });

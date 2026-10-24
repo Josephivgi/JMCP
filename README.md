@@ -48,14 +48,26 @@ files. See [servers/instructions](servers/instructions/README.md).
 Memory shared by every agent. What one agent saves (a preference, a decision,
 a project fact), the others can search and read. The Memory page lists,
 searches, adds, edits and deletes memories and shows which agent saved each
-one. See [servers/memory](servers/memory/README.md).
+one. Agents cannot save secrets there. See
+[servers/memory](servers/memory/README.md).
 
 ## jmcp-skills
 
 One skills library for every agent, including agents with no skills feature.
 The Skills page adds, edits, turns off and deletes skills, and imports
 `SKILL.md` folders from Claude Code, Codex, Droid, Cursor, Gemini, OpenCode,
-Grok and `.agents`. See [servers/skills](servers/skills/README.md).
+Grok and `.agents`. Agents can also save a skill with `skill_save`, for
+example a procedure they worked out, for every agent to use next time. See
+[servers/skills](servers/skills/README.md).
+
+## jmcp-health
+
+Checks this computer and the hosts in `~/.ssh/config`, and explains what is
+wrong in plain words. The Health page shows CPU, memory, disks and problems,
+and installs package updates on SSH hosts. Agents get the same checks, an
+`updates` tool to check and install updates on a host when you ask, and
+`show_user` to leave you a card on the Health page. See
+[servers/health](servers/health/README.md).
 
 ## Run
 

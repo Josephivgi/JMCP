@@ -136,7 +136,7 @@ test("skills server lists only skills that are on and loads them", async () => {
     assert.match(init.instructions, /- deploy: Use before deploying\./);
     assert.ok(!init.instructions.includes("hidden"));
     const { tools } = await c.request("tools/list");
-    assert.deepStrictEqual(tools.map((t) => t.name), ["skills_list", "skill_read"]);
+    assert.deepStrictEqual(tools.map((t) => t.name), ["skills_list", "skill_read", "skill_save"]);
     assert.strictEqual((await c.callTool("skills_list")).text, "- deploy: Use before deploying.");
     assert.match((await c.callTool("skill_read", { name: "deploy" })).text, /# Skill: deploy[\s\S]*Check CI first\./);
     assert.strictEqual((await c.callTool("skill_read", { name: "hidden" })).isError, true);
@@ -205,4 +205,116 @@ test("instruction folders are detected from agent history and home, and can be h
   assert.deepStrictEqual(instructions.detectFolders(home), []);
   instructions.addFolder(home, demo);
   assert.ok(instructions.folders(home).includes(demo));
+});
+
+test("memory server refuses secrets", async () => {
+  const home = scratch();
+  const c = connect(process.execPath, [MEMORY], { env: { JMCP_HOME: path.join(home, ".jmcp") } });
+  try {
+    await c.initialize("test");
+    for (const body of ["key sk-ant-api03-" + "a".repeat(40), "token ghp_" + "b".repeat(36), "-----BEGIN OPENSSH PRIVATE KEY-----\nabc", "password: hunter2hunter2", "AKIA" + "ABCDEFGHIJKLMNOP"]) {
+      const r = await c.callTool("memory_save", { title: "x", body });
+      assert.strictEqual(r.isError, true, body);
+      assert.match(r.text, /never put secrets/);
+    }
+    assert.deepStrictEqual(memory.list(home), []);
+    assert.strictEqual((await c.callTool("memory_save", { title: "Deploy key", body: "The deploy key is in 1Password under Servers." })).isError, false);
+  } finally {
+    await c.close();
+  }
+});
+
+test("skills server: agents create and replace their own skills, not imported ones", async () => {
+  const home = scratch();
+  const src = path.join(home, "skills", "imported", "SKILL.md");
+  fs.mkdirSync(path.dirname(src), { recursive: true });
+  fs.writeFileSync(src, "---\nname: imported\ndescription: From a file.\n---\nBody.");
+  skills.importFiles(home, [src]);
+  const c = connect(process.execPath, [SKILLS], { env: { JMCP_HOME: path.join(home, ".jmcp") } });
+  try {
+    await c.initialize("test");
+    const { tools } = await c.request("tools/list");
+    assert.deepStrictEqual(tools.map((t) => t.name), ["skills_list", "skill_read", "skill_save"]);
+    assert.match((await c.callTool("skill_save", { name: "Release Notes", description: "Use when writing release notes.", instructions: "Group by New, Improved, Fixed." })).text, /Saved new skill release-notes/);
+    assert.match((await c.callTool("skill_read", { name: "release-notes" })).text, /Group by New/);
+    assert.match((await c.callTool("skill_save", { name: "release-notes", description: "Use for release notes.", instructions: "v2" })).text, /Replaced skill release-notes/);
+    assert.strictEqual(skills.get(home, "release-notes").body, "v2");
+    const blocked = await c.callTool("skill_save", { name: "imported", description: "x", instructions: "y" });
+    assert.strictEqual(blocked.isError, true);
+    assert.match(blocked.text, /Edit that SKILL\.md/);
+    assert.strictEqual((await c.callTool("skill_save", { name: "x", description: "", instructions: "y" })).isError, true);
+  } finally {
+    await c.close();
+  }
+});
+
+test("a name that equals another memory's id deletes only the named one", () => {
+  const home = scratch();
+  const a = memory.save(home, { title: "A", body: "first" }).memory;
+  memory.save(home, { name: a.id, title: "B", body: "second" });
+  const named = memory.list(home).find((m) => m.title === "B").name;
+  assert.strictEqual(memory.remove(home, named, { byName: true }), true);
+  assert.deepStrictEqual(memory.list(home).map((m) => m.title), ["A"]);
+  assert.strictEqual(memory.get(home, a.id).title, "A");
+});
+
+test("skills index is bounded", () => {
+  const list = Array.from({ length: 250 }, (_, i) => ({ name: "s" + i, description: "d".repeat(1000) }));
+  const text = skills.index(list, 60);
+  assert.strictEqual(text.split("\n").length, 61);
+  assert.match(text, /and 190 more/);
+  assert.ok(text.split("\n")[0].length < 420);
+});
+
+test("short passwords are refused; placeholders are not", () => {
+  const { findSecret } = require("../servers/memory/lib/store.js");
+  assert.ok(findSecret("password: hunter2"));
+  assert.ok(findSecret("pwd=abcd"));
+  assert.strictEqual(findSecret("password: none"), "");
+  assert.strictEqual(findSecret("password: <your password>"), "");
+  assert.strictEqual(findSecret("The password is in 1Password."), "");
+});
+
+test("tool arguments are checked against the schema before anything runs", async () => {
+  const home = scratch();
+  memory.save(home, { name: "foo", title: "Foo", body: "keep me" });
+  const c = connect(process.execPath, [MEMORY], { env: { JMCP_HOME: path.join(home, ".jmcp") } });
+  try {
+    await c.initialize("test");
+    const r = await c.callTool("memory_delete", { name: ["foo"] });
+    assert.strictEqual(r.isError, true);
+    assert.match(r.text, /Invalid arguments: name must be a string/);
+    assert.strictEqual(memory.list(home).length, 1);
+  } finally {
+    await c.close();
+  }
+});
+
+test("skills_list searches every skill and skill_save is one transaction", async () => {
+  const home = scratch();
+  const store = require("../servers/skills/lib/store.js");
+  for (let i = 0; i < 205; i++) store.add(path.join(home), { name: "skill-" + i, description: "Thing number " + i + (i === 204 ? " about deploys" : "") + ".", body: "b" });
+  const c = connect(process.execPath, [SKILLS], { env: { JMCP_HOME: path.join(home, ".jmcp") } });
+  try {
+    await c.initialize("test");
+    assert.match((await c.callTool("skills_list", {})).text, /and 5 more\. Call skills_list with query/);
+    assert.match((await c.callTool("skills_list", { query: "deploys" })).text, /^- skill-204:/);
+  } finally {
+    await c.close();
+  }
+  const a = store.save(home, { name: "same", description: "d", body: "one" });
+  const b = store.save(home, { name: "same", description: "d", body: "two" });
+  assert.strictEqual(a.created, true);
+  assert.strictEqual(b.created, false);
+  assert.strictEqual(store.get(home, "same", { byName: true }).body, "two");
+});
+
+test("importing a skill named like another skill's id imports it", () => {
+  const home = scratch();
+  const other = skills.add(home, { name: "other", description: "d", body: "b" });
+  const src = path.join(home, "s", other.id, "SKILL.md");
+  fs.mkdirSync(path.dirname(src), { recursive: true });
+  fs.writeFileSync(src, "---\nname: " + other.id + "\ndescription: From a file.\n---\nBody.");
+  const [r] = skills.importFiles(home, [src]);
+  assert.strictEqual(r.ok, true, r.error);
 });

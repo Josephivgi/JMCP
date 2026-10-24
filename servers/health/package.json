@@ -1,6 +1,6 @@
 {
   "name": "jmcp-health",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Read-only MCP server that checks this computer or SSH hosts and explains problems, slow-loading text and glitches.",
   "license": "MIT",
   "author": "Josephivgi",

@@ -117,7 +117,15 @@ async function copyDir(src, dest) {
       throw new Error("Could not replace " + dest + " (" + e.code + "). Close the agents using it and try again.");
     }
   }
-  await fs.promises.rename(next, dest);
+  try {
+    await fs.promises.rename(next, dest);
+  } catch (e) {
+    // Put the old copy back right away; agents must not be left with no
+    // server until the next JMCP run.
+    if (!fs.existsSync(dest) && fs.existsSync(old)) await fs.promises.rename(old, dest).catch(() => {});
+    await fs.promises.rm(next, { recursive: true, force: true }).catch(() => {});
+    throw new Error("Could not replace " + dest + " (" + e.code + "). Close the agents using it and try again.");
+  }
   await fs.promises.rm(old, { recursive: true, force: true }).catch(() => {});
 }
 
@@ -139,12 +147,30 @@ function readVersion(dir) {
   }
 }
 
-// 1 when a is newer than b, -1 when older, 0 when the same.
+// 1 when a is newer than b, -1 when older, 0 when the same, by SemVer
+// precedence: 1.0.0 is newer than 1.0.0-rc.1, build metadata is ignored.
 function compareVersions(a, b) {
-  const pa = String(a).split(/[.+-]/).map((x) => parseInt(x, 10) || 0);
-  const pb = String(b).split(/[.+-]/).map((x) => parseInt(x, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0) ? 1 : -1;
+  const split = (v) => {
+    const [core, pre] = String(v).trim().replace(/^v/, "").split("+")[0].split(/-(.*)/s);
+    return { core: core.split(".").map((x) => parseInt(x, 10) || 0), pre: pre ? pre.split(".") : [] };
+  };
+  const x = split(a);
+  const y = split(b);
+  for (let i = 0; i < Math.max(x.core.length, y.core.length, 3); i++) {
+    if ((x.core[i] || 0) !== (y.core[i] || 0)) return (x.core[i] || 0) > (y.core[i] || 0) ? 1 : -1;
+  }
+  if (!x.pre.length || !y.pre.length) return x.pre.length === y.pre.length ? 0 : x.pre.length ? -1 : 1;
+  for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+    const p = x.pre[i];
+    const q = y.pre[i];
+    if (p === undefined) return -1;
+    if (q === undefined) return 1;
+    if (p === q) continue;
+    const pn = /^\d+$/.test(p);
+    const qn = /^\d+$/.test(q);
+    if (pn && qn) return Number(p) > Number(q) ? 1 : -1;
+    if (pn !== qn) return pn ? -1 : 1;
+    return p > q ? 1 : -1;
   }
   return 0;
 }
@@ -214,14 +240,47 @@ async function updateServer(id, home) {
   if (!before.installed) throw new Error(item.name + " is not installed yet.");
   const def = await prepare(item, home);
   const results = [];
-  for (const a of agents.scan(home).filter((x) => x.servers.some((s) => s.name === item.name))) {
+  const found = agents.scan(home);
+  for (const a of found.filter((x) => x.servers.some((s) => s.name === item.name))) {
     try {
       results.push(Object.assign({ ok: true }, agents.install(a.id, item.name, def, home)));
     } catch (e) {
       results.push({ ok: false, agent: a.id, error: String(e.message || e) });
     }
   }
-  return { server: item.name, from: before.installed, to: versions(item, home).installed, results };
+  // An agent whose config could not be written is retried on the next
+  // update, even though the copy is already current. One still waiting
+  // whose config cannot be read right now stays waiting; one whose config
+  // reads fine without the server had it removed, so it is dropped.
+  const retry = retryFile(item, home);
+  for (const id of readRetry(retry)) {
+    if (results.some((r) => r.agent === id)) continue;
+    const a = found.find((x) => x.id === id);
+    if (a && a.errors && a.errors.length) results.push({ ok: false, agent: id, error: a.errors[0] });
+  }
+  // A config that cannot be read now may hold the server too: retry it.
+  for (const a of found) {
+    if (a.errors && a.errors.length && !results.some((r) => r.agent === a.id)) results.push({ ok: false, agent: a.id, error: a.errors[0] });
+  }
+  const failed = results.filter((r) => !r.ok);
+  if (failed.length) fs.writeFileSync(retry, JSON.stringify(failed.map((r) => r.agent)));
+  else fs.rmSync(retry, { force: true });
+  const out = { ok: !failed.length, server: item.name, from: before.installed, to: versions(item, home).installed, results };
+  if (failed.length) out.error = "Could not update " + failed.map((r) => r.agent + " (" + r.error + ")").join(", ") + ". JMCP tries again next time.";
+  return out;
+}
+
+function readRetry(file) {
+  try {
+    const ids = JSON.parse(fs.readFileSync(file, "utf8"));
+    return Array.isArray(ids) ? ids.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function retryFile(item, home) {
+  return path.join(jmcpHome(home), "servers", item.id + ".retry.json");
 }
 
 // Every installed JMCP server older than this JMCP, updated. The app runs
@@ -229,9 +288,10 @@ async function updateServer(id, home) {
 async function updateAll(home) {
   const out = [];
   for (const item of CATALOG) {
-    if (!versions(item, home).updateAvailable) continue;
+    const v = versions(item, home);
+    if (!v.updateAvailable && !(v.installed && fs.existsSync(retryFile(item, home)))) continue;
     try {
-      out.push(Object.assign({ ok: true }, await updateServer(item.id, home)));
+      out.push(await updateServer(item.id, home));
     } catch (e) {
       out.push({ ok: false, server: item.name, error: String(e.message || e) });
     }

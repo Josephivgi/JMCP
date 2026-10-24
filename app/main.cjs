@@ -66,7 +66,11 @@ handle("update", async (id) => {
 // Updates done when the app started, for the JMCP servers page to show.
 let startupUpdates = Promise.resolve([]);
 handle("startup-updates", () => startupUpdates);
-handle("uninstall", (id, agentIds) => Object.assign({ state: state() }, catalog.uninstallServer(String(id), Array.isArray(agentIds) ? agentIds.map(String) : [], HOME)));
+// Uninstall first, then read the state, so the page sees the server gone.
+handle("uninstall", (id, agentIds) => {
+  const r = catalog.uninstallServer(String(id), Array.isArray(agentIds) ? agentIds.map(String) : [], HOME);
+  return Object.assign({}, r, { state: state() });
+});
 handle("probe", async (agentId, name) => {
   const a = agents.scan(HOME).find((x) => x.id === agentId);
   const s = a && a.servers.find((x) => x.name === name);
@@ -111,7 +115,7 @@ handle("skills-import", (files) => {
 });
 handle("instructions-list", () => instructions.list(HOME));
 handle("instructions-detect", () => instructions.detectFolders(HOME));
-handle("instructions-read", (file) => instructions.read(String(file)));
+handle("instructions-read", (file) => instructions.read(String(file), HOME));
 handle("instructions-write", (file, text, expectedHash) => instructions.write(HOME, String(file), String(text), { by: "app", expectedHash: typeof expectedHash === "string" ? expectedHash : undefined }));
 handle("instructions-remove", (file) => instructions.remove(HOME, String(file), { by: "app" }));
 handle("instructions-add-folder", (folder) => instructions.addFolder(HOME, String(folder)));

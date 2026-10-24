@@ -3,12 +3,15 @@
 
 // Reads health data from this computer or an SSH host and explains what is
 // wrong: problems found, why text is slow to show in the browser, and why the
-// computer feels glitchy. Read-only: it never changes anything on the target.
+// computer feels glitchy. Read-only, except the updates tool with install:
+// true, which installs package updates on an SSH host when asked.
 
 const { collect, sshHosts, checkTarget } = require("./lib/collect.js");
 const { analyze, summary, TEXT_REASONS, GLITCH_REASONS } = require("./lib/analyze.js");
 const { checkPage } = require("./lib/page.js");
 const notes = require("./lib/notes.js");
+const quick = require("./lib/quick.js");
+const { rpcError, serve, checkArgs } = require("./lib/rpc.js");
 const PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const VERSION = require("./package.json").version;
 
@@ -43,6 +46,20 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { target: TARGET }, additionalProperties: false },
   },
   {
+    name: "updates",
+    description: "Pending package updates on an SSH host from ~/.ssh/config (apt or dnf). Without install it only checks and shows what would be installed. With install: true it installs them the same way as the JMCP Health page: apt-get upgrade --with-new-pkgs (dist-upgrade on Proxmox) or dnf upgrade, as root or with passwordless sudo. It keeps config files, removes nothing and never reboots. Only install when the user asked for updates on that host.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: { type: "string", description: "Host alias from ~/.ssh/config (see targets)." },
+        install: { type: "boolean", description: "true installs the updates. Leave out to only check." },
+      },
+      required: ["target"],
+      additionalProperties: false,
+    },
+    annotations: { destructiveHint: false, openWorldHint: true },
+  },
+  {
     name: "show_user",
     description: "Put a card on the Health page of the JMCP app for the user to read later: a finding, a warning, a finished result or something they should act on. Use it for things worth seeing after this chat ends, not for normal replies. Keep it short.",
     inputSchema: {
@@ -60,6 +77,8 @@ const TOOLS = [
 ];
 
 let client = "";
+
+const INSTRUCTIONS = "Diagnoses this computer or SSH hosts. Use targets to see hosts, problems for everything found, slow_text for slow-loading text in the browser (pass url to test a page), glitchy for stutter and crashes, and updates to check pending package updates on a host (install: true installs them, only when the user asks). Explain the results to the user in plain words, worst first. Use show_user to leave the user a card on the JMCP Health page when you find something they should see later.";
 
 const text = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }], isError: false });
 const fail = (msg) => ({ content: [{ type: "text", text: msg }], isError: true });
@@ -109,70 +128,69 @@ async function callTool(name, args) {
     out.commonCauses = TEXT_REASONS;
     return text(out);
   }
+  if (name === "updates") {
+    const target = String(args.target || "");
+    if (!sshHosts().some((h) => h.name === target)) return fail("Unknown host " + JSON.stringify(target) + ". Use a host alias from targets.");
+    if (args.install === true) {
+      const r = await quick.applyUpdates(target);
+      if (!r.ok) return fail("Updates failed on " + target + ": " + r.error + (r.log ? "\n\nLast output:\n" + r.log : ""));
+      const after = await quick.checkHost(target);
+      return text({
+        host: target,
+        installed: r.installed,
+        seconds: Math.round(r.ms / 1000),
+        rebootNeeded: r.rebootNeeded,
+        stillWaiting: after.ok && after.updates ? after.updates.packages : null,
+        note: r.rebootNeeded ? "Reboot the host to finish. JMCP never reboots it." : undefined,
+      });
+    }
+    const c = await quick.checkHost(target);
+    if (!c.ok) return fail("Could not check " + target + ": " + c.error);
+    if (!c.updates) return text({ host: target, note: "No apt-get or dnf on this host." });
+    const sim = c.updates.count ? await quick.applyUpdates(target, undefined, { simulate: true }) : null;
+    return text({
+      host: target,
+      waiting: c.updates.count,
+      security: c.updates.security,
+      packages: c.updates.packages,
+      wouldInstall: sim && sim.ok ? sim.planned : undefined,
+      previewError: sim && !sim.ok ? sim.error : undefined,
+      canInstall: c.updates.canApply,
+      rebootNeeded: c.rebootNeeded,
+      listsUpdated: c.updates.listedAt ? new Date(c.updates.listedAt).toISOString() : null,
+    });
+  }
   return fail("Unknown tool " + name);
 }
 
-function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + "\n");
-}
-
-async function handle(msg) {
-  const { id, method, params } = msg || {};
-  const isRequest = id !== undefined && id !== null;
-  try {
-    if (method === "initialize") {
-      const asked = params && params.protocolVersion;
-      client = String((params && params.clientInfo && params.clientInfo.name) || "").slice(0, 80);
-      return send({
-        jsonrpc: "2.0", id,
-        result: {
-          protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "jmcp-health", title: "JMCP Health", version: VERSION },
-          instructions: "Diagnoses this computer or SSH hosts, read-only. Use targets to see hosts, problems for everything found, slow_text for slow-loading text in the browser (pass url to test a page), glitchy for stutter and crashes. Explain the results to the user in plain words, worst first. Use show_user to leave the user a card on the JMCP Health page when you find something they should see later.",
-        },
-      });
+const methods = {
+  initialize(params) {
+    const asked = params.protocolVersion;
+    client = String((params.clientInfo && params.clientInfo.name) || "").slice(0, 80);
+    return {
+      protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
+      capabilities: { tools: { listChanged: false } },
+      serverInfo: { name: "jmcp-health", title: "JMCP Health", version: VERSION },
+      instructions: INSTRUCTIONS,
+    };
+  },
+  ping: () => ({}),
+  "tools/list": () => ({ tools: TOOLS }),
+  async "tools/call"(params) {
+    const tool = TOOLS.find((t) => t.name === params.name);
+    if (!tool) throw rpcError(-32602, "Unknown tool " + params.name);
+    const wrong = checkArgs(tool.inputSchema, params.arguments);
+    if (wrong) return fail("Invalid arguments: " + wrong);
+    try {
+      return await callTool(params.name, params.arguments);
+    } catch (e) {
+      return fail(String(e.message || e));
     }
-    if (method === "ping") return isRequest && send({ jsonrpc: "2.0", id, result: {} });
-    if (method === "tools/list") return send({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
-    if (method === "tools/call") {
-      let result;
-      try {
-        result = await callTool(params && params.name, params && params.arguments);
-      } catch (e) {
-        result = fail(String(e.message || e));
-      }
-      return send({ jsonrpc: "2.0", id, result });
-    }
-    if (method === "resources/list") return send({ jsonrpc: "2.0", id, result: { resources: [] } });
-    if (method === "prompts/list") return send({ jsonrpc: "2.0", id, result: { prompts: [] } });
-    if (!isRequest) return;
-    send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found: " + method } });
-  } catch (e) {
-    if (isRequest) send({ jsonrpc: "2.0", id, error: { code: -32603, message: String(e.message || e) } });
-  }
-}
+  },
+  "resources/list": () => ({ resources: [] }),
+  "prompts/list": () => ({ prompts: [] }),
+};
 
-if (require.main === module) {
-  let buffer = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    buffer += chunk;
-    let nl;
-    while ((nl = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (Array.isArray(msg)) msg.forEach(handle);
-      else handle(msg);
-    }
-  });
-}
+if (require.main === module) serve(methods);
 
-module.exports = { handle, callTool, TOOLS };
+module.exports = { methods, callTool, TOOLS };

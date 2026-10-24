@@ -19,16 +19,39 @@ const BOOT = Buffer.from(
 ).toString("base64");
 const PS_ARGS = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", BOOT];
 
+// End a child and everything it started, without opening a window.
+function killTree(child) {
+  if (!child.pid) return;
+  if (process.platform === "win32") {
+    try {
+      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }).on("error", () => child.kill());
+    } catch {
+      child.kill();
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
 function run(cmd, args, input, timeoutMs) {
   return new Promise((resolve) => {
     let out = "";
     let err = "";
     let done = false;
-    const child = spawn(cmd, args, { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    // On Linux and macOS the child leads its own process group, so a timeout
+    // can end everything it started (ssh's ProxyJump child, curl, ...).
+    // Windows needs no group; taskkill /T walks the tree. detached on Windows
+    // would give the child its own console window, so it is never set there.
+    const win = process.platform === "win32";
+    const child = spawn(cmd, args, { windowsHide: true, stdio: ["pipe", "pipe", "pipe"], detached: !win });
     const timer = setTimeout(() => {
       if (done) return;
       done = true;
-      child.kill();
+      killTree(child);
       resolve({ code: -1, out, err: err + "\nTimed out after " + timeoutMs / 1000 + "s." });
     }, timeoutMs);
     child.stdout.on("data", (d) => (out += d));
@@ -128,6 +151,9 @@ async function collect(target, opts) {
     res = kind === "linux" ? await ssh(t, "sh -s", SH, timeoutMs) : await ssh(t, "powershell " + PS_ARGS.join(" "), Buffer.from(PS1).toString("base64"), timeoutMs);
   }
   if (!res.out.trim()) throw new Error("Collector on " + t + " returned nothing (exit " + res.code + "): " + res.err.trim().slice(-400));
+  // linux.sh ends with @@end; without it the collector was cut off, and its
+  // partial facts would look healthy.
+  if (kind === "linux" && !/^@@end\r?$/m.test(res.out)) throw new Error("The collector on " + t + " stopped part way" + (res.code === -1 ? " (timed out)" : " (exit " + res.code + ")") + ": " + res.err.trim().slice(-300));
   const facts = kind === "windows" ? parseWindows(res.out) : parseLinux(res.out);
   facts.target = t;
   facts.collectMs = Date.now() - started;
@@ -184,7 +210,9 @@ function parseLinux(out) {
   };
   const load = first("loadavg").split(/\s+/).map(num);
   const cores = num(first("nproc")) || 1;
-  const cpuTimes = (k) => first(k).split(/\s+/).slice(1).map(Number);
+  // user nice system idle iowait irq softirq steal; guest and guest_nice are
+  // already counted in user and nice.
+  const cpuTimes = (k) => first(k).split(/\s+/).slice(1, 9).map(Number);
   const a = cpuTimes("stat1");
   const b = cpuTimes("stat2");
   let loadPct = null;

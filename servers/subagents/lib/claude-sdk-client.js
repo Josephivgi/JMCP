@@ -344,7 +344,9 @@ class ClaudeSdkClient {
   // Claude Code runs as a hidden child so no console window opens on Windows,
   // and so JAgents knows its pid and exit.
   _spawn(opts) {
-    const child = spawnHidden(opts.command, opts.args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "pipe"], signal: opts.signal });
+    // Its own process group on POSIX, so stop can kill the shells and tools
+    // it started even after Claude Code itself has exited.
+    const child = spawnHidden(opts.command, opts.args, { cwd: opts.cwd, env: opts.env, stdio: ["pipe", "pipe", "pipe"], signal: opts.signal, detached: process.platform !== "win32" });
     this.child = child;
     child.stderr.on("data", (c) => {
       const text = c.toString("utf8");
@@ -506,9 +508,16 @@ class ClaudeSdkClient {
     const child = this.child;
     this.child = null;
     this.query = null;
+    // Kill the whole tree first: aborting kills only Claude Code, and the
+    // shells and tools it started outlive it. The abort waits for the kill,
+    // since a live tree is the easiest to find. killTree also finds what an
+    // already exited Claude Code left behind. Resolves when it is done.
+    const abort = this.abort;
     if (this.input) this.input.end();
-    if (this.abort) this.abort.abort();
-    if (child && child.exitCode == null) setTimeout(() => child.exitCode == null && killTree(child), 2500).unref();
+    const end = () => {
+      if (abort) abort.abort();
+    };
+    return (child ? killTree(child) : Promise.resolve()).then(end, end);
   }
 }
 

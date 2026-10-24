@@ -23,6 +23,7 @@ const crypto = require("node:crypto");
 
 const PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const VERSION = require("./package.json").version;
+const { rpcError, serve, checkArgs } = require("./lib/rpc.js");
 const JMCP_HOME = process.env.JMCP_HOME ? path.resolve(process.env.JMCP_HOME) : path.join(os.homedir(), ".jmcp");
 const WAIT_DEFAULT_S = 50;
 const WAIT_MAX_S = 1800;
@@ -98,8 +99,10 @@ function save(s, now) {
   else saveTimers.set(s.handle, setTimeout(run, 1000));
 }
 
+// Every row is clipped: a huge message, error or tool title must not grow
+// the transcript (memory and the saved row) without bound.
 function push(s, row) {
-  s.rows.push(Object.assign({ at: Date.now() }, row));
+  s.rows.push(Object.assign({ at: Date.now() }, row, { text: String(row.text == null ? "" : row.text).slice(0, row.role === "tool" ? 500 : TEXT_MAX) }));
   if (s.rows.length > ROWS_MAX) s.rows.splice(0, s.rows.length - ROWS_MAX);
 }
 
@@ -120,7 +123,7 @@ function onUpdate(s, params) {
       const r = s.rows[i];
       if (r.role === "tool" && r.id === u.toolCallId) {
         if (u.status) r.status = u.status;
-        if (u.title) r.text = String(u.title);
+        if (u.title) r.text = String(u.title).slice(0, 500);
         break;
       }
     }
@@ -133,16 +136,32 @@ function finishTurn(s, why) {
   for (const fn of [...s.waiters]) fn(why);
 }
 
+// Kills still running. shutdown waits for every one, including kills that
+// stop and agent exits started earlier.
+const kills = new Set();
+
+function endClient(c) {
+  let p;
+  try {
+    p = Promise.resolve(c.stop()).catch(() => {});
+  } catch {
+    p = Promise.resolve();
+  }
+  kills.add(p);
+  p.then(() => kills.delete(p));
+  return p;
+}
+
+// Returns a promise that resolves once the agent's processes are killed.
 function stopClient(s) {
-  if (!s.client) return;
+  if (!s.client) return Promise.resolve();
   const c = s.client;
   s.client = null;
-  try {
-    c.stop();
-  } catch {
-    /* already gone */
-  }
+  return endClient(c);
 }
+
+const STOPPED = "Stopped before it started.";
+const liveCount = (except) => [...subs.values()].filter((x) => x !== except && (x.client || busy(x))).length;
 
 function permissionAnswer(params) {
   const { autoPermissionOption } = require("./lib/acp-permissions");
@@ -200,13 +219,26 @@ function openClient(providerId, cwd, onUpd, key) {
 }
 
 async function startSession(s) {
+  // Restarts count against the limit too, not only spawn.
+  const live = liveCount(s);
+  if (live >= MAX_LIVE) throw new Error("You already have " + live + " running subagents (limit " + MAX_LIVE + "). Stop one with close: true first.");
   let client = null;
   client = openClient(s.provider, s.cwd, (p) => s.client === client && onUpdate(s, p), s.handle);
   s.client = client;
   s.status = "starting";
+  // stop clears s.client; every await below checks it so a stop during
+  // start ends the start instead of bringing the agent up anyway.
+  const alive = () => {
+    if (s.client === client) return;
+    const e = new Error(STOPPED);
+    e.stopped = true;
+    throw e;
+  };
   const onExit = () => {
     if (s.client !== client) return;
     s.client = null;
+    // Tools it started may still run; take them down too.
+    endClient(client);
     if (s.status === "busy") {
       s.status = "error";
       s.error = "The agent exited mid-turn.";
@@ -219,6 +251,7 @@ async function startSession(s) {
   else if (client.child) client.child.on("exit", onExit);
   try {
     await client.initialize();
+    alive();
     let created;
     try {
       created = await client.newSession({ cwd: s.cwd, mcpServers: [] });
@@ -231,16 +264,20 @@ async function startSession(s) {
       try {
         await client.authenticate(method);
       } catch (authErr) {
+        alive();
         throw new Error(s.providerName + " is not signed in. Sign in with its own CLI first (" + errText(authErr) + ").");
       }
+      alive();
       created = await client.newSession({ cwd: s.cwd, mcpServers: [] });
     }
+    alive();
     s.sessionId = created.sessionId || created.session_id || "";
     if (!client.sessionId) client.sessionId = s.sessionId;
     if (s.want.model) {
       try {
         await client.setModel(s.want.model, client.sessionId);
       } catch (e) {
+        alive();
         push(s, { role: "system", text: "Model " + s.want.model + " not used: " + errText(e) });
       }
     }
@@ -248,13 +285,16 @@ async function startSession(s) {
       try {
         await client.setEffort(s.want.effort, client.sessionId);
       } catch (e) {
+        alive();
         push(s, { role: "system", text: "Effort " + s.want.effort + " not used: " + errText(e) });
       }
     }
+    alive();
     const st = typeof client.effortState === "function" ? client.effortState() : {};
     s.using = { model: (client.models && client.models.currentModelId) || "", effort: st.current || "" };
   } catch (e) {
-    stopClient(s);
+    if (s.client === client) stopClient(s);
+    else if (!e.stopped) e = Object.assign(new Error(STOPPED), { stopped: true });
     throw e;
   }
   s.sessionUsed = false;
@@ -276,9 +316,12 @@ function recap(s) {
   return "Your earlier session ended. The last messages were:\n" + last.map((r) => (r.role === "user" ? parentName + ": " : "You: ") + String(r.text).slice(0, 1500)).join("\n\n");
 }
 
-async function runTurn(s, text) {
+// gen is this turn's generation. stop with close and every new turn change
+// s.gen, so a turn that finishes after that leaves the subagent alone.
+async function runTurn(s, text, gen) {
   s.status = "starting";
   if (!s.client) await startSession(s);
+  if (s.gen !== gen) return;
   const parts = [];
   if (!s.introduced) parts.push(intro(s));
   else if (!s.sessionUsed) {
@@ -295,12 +338,20 @@ async function runTurn(s, text) {
   save(s, true);
   try {
     const res = await s.client.promptWithRecovery(parts.join("\n\n"), s.sessionId, {});
+    if (s.gen !== gen) return;
     if (res && res.stopReason === "cancelled") push(s, { role: "system", text: "Stopped by " + parentName + "." });
     s.status = s.client ? "ready" : "stopped";
   } catch (e) {
+    if (s.gen !== gen) return;
+    // The agent may be half broken after a failed turn: end its session so
+    // the next message starts a fresh one with a recap. Messages queued
+    // behind the failed turn are dropped, not fed to a broken agent.
     push(s, { role: "error", text: errText(e) });
-    s.status = s.client && s.client.started ? "ready" : "error";
+    stopClient(s);
+    s.status = "error";
     s.error = errText(e);
+    if (s.queue.length) push(s, { role: "system", text: s.queue.length + " queued message(s) were not sent because the turn failed." });
+    s.queue.length = 0;
   }
   s.updatedAt = Date.now();
   save(s, true);
@@ -314,13 +365,22 @@ function deliver(s, text) {
     s.queue.push(text);
     return { queued: s.queue.length };
   }
-  runTurn(s, text).catch((e) => {
-    s.status = "error";
-    s.error = errText(e);
-    push(s, { role: "error", text: s.error });
+  const gen = (s.gen = (s.gen || 0) + 1);
+  runTurn(s, text, gen).catch((e) => {
+    // A stop or a newer turn owns the subagent now.
+    if (s.gen !== gen) return;
+    // Start failed. Queued messages cannot be delivered, so they go too;
+    // otherwise busy() stays true and every wait times out.
+    s.queue.length = 0;
+    if (e && e.stopped) s.status = "stopped";
+    else {
+      s.status = "error";
+      s.error = errText(e);
+      push(s, { role: "error", text: s.error });
+    }
     s.updatedAt = Date.now();
     save(s, true);
-    finishTurn(s, "error");
+    finishTurn(s, s.status);
   });
   return { queued: 0 };
 }
@@ -385,7 +445,7 @@ function create(args) {
   if (!a) throw new Error("Unknown provider " + raw + ". Call providers.");
   const info = agents.listAgents().find((x) => x.id === a.id);
   if (!info.installed) throw new Error(a.name + " is not installed. " + a.install);
-  const live = [...subs.values()].filter((s) => s.client || busy(s)).length;
+  const live = liveCount();
   if (live >= MAX_LIVE) throw new Error("You already have " + live + " running subagents (limit " + MAX_LIVE + "). Stop one with close: true first.");
   const cwd = path.resolve(String(args.cwd || process.cwd()));
   if (!fs.existsSync(cwd)) throw new Error("Folder not found: " + cwd);
@@ -483,6 +543,7 @@ const TOOLS = [
     run: async (args) => {
       const s = own(args.agent);
       s.queue.length = 0;
+      const starting = s.status === "starting";
       if (s.client && s.status === "busy") {
         try {
           await s.client.cancel(s.sessionId);
@@ -490,7 +551,11 @@ const TOOLS = [
           /* nothing running */
         }
       }
-      if (args.close || args.remove) {
+      // A stop while it is still starting ends the start: there is no turn
+      // to cancel yet.
+      if (args.close || args.remove || starting) {
+        if (busy(s) || starting) push(s, { role: "system", text: "Stopped by " + parentName + "." });
+        s.gen = (s.gen || 0) + 1;
         stopClient(s);
         s.status = "stopped";
         s.updatedAt = Date.now();
@@ -500,7 +565,7 @@ const TOOLS = [
         subs.delete(s.handle);
         dbRun(() => q.del.run(SESSION, s.handle));
       } else save(s, true);
-      return { handle: s.handle, stopped: true, closed: Boolean(args.close || args.remove), removed: Boolean(args.remove) };
+      return { handle: s.handle, stopped: true, closed: Boolean(args.close || args.remove || starting), removed: Boolean(args.remove) };
     },
   },
 ];
@@ -511,54 +576,42 @@ const INSTRUCTIONS = IS_SUBAGENT
 
 // ---- MCP over stdio ----
 
-function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + "\n");
-}
-
 function result(value) {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   return { content: [{ type: "text", text }], isError: false };
 }
 
-async function handle(msg) {
-  const { id, method, params } = msg || {};
-  const isRequest = id !== undefined && id !== null;
-  try {
-    if (method === "initialize") {
-      const asked = params && params.protocolVersion;
-      const ci = (params && params.clientInfo) || {};
-      if (ci.name) parentName = String(ci.name).slice(0, 60);
-      if (!IS_SUBAGENT) dbRun(() => q.session.run(SESSION, parentName, process.pid, process.cwd(), Date.now()));
-      return send({
-        jsonrpc: "2.0",
-        id,
-        result: {
-          protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "jmcp-subagents", title: "JMCP Subagents", version: VERSION },
-          instructions: INSTRUCTIONS,
-        },
-      });
+const methods = {
+  initialize(params) {
+    const asked = params.protocolVersion;
+    const ci = params.clientInfo || {};
+    if (ci.name) parentName = String(ci.name).slice(0, 60);
+    if (!IS_SUBAGENT) dbRun(() => q.session.run(SESSION, parentName, process.pid, process.cwd(), Date.now()));
+    return {
+      protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
+      capabilities: { tools: { listChanged: false } },
+      serverInfo: { name: "jmcp-subagents", title: "JMCP Subagents", version: VERSION },
+      instructions: INSTRUCTIONS,
+    };
+  },
+  ping: () => ({}),
+  "tools/list": () => ({ tools: IS_SUBAGENT ? [] : TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) }),
+  async "tools/call"(params) {
+    // A subagent sees no tools; tell it why instead of a bare protocol error.
+    if (IS_SUBAGENT) return { content: [{ type: "text", text: INSTRUCTIONS }], isError: true };
+    const tool = TOOLS.find((t) => t.name === params.name);
+    if (!tool) throw rpcError(-32602, "Unknown tool " + params.name);
+    const wrong = checkArgs(tool.inputSchema, params.arguments);
+    if (wrong) return { content: [{ type: "text", text: "Invalid arguments: " + wrong }], isError: true };
+    try {
+      return result(await tool.run(params.arguments || {}));
+    } catch (e) {
+      return { content: [{ type: "text", text: errText(e) }], isError: true };
     }
-    if (method === "ping") return isRequest && send({ jsonrpc: "2.0", id, result: {} });
-    if (method === "tools/list") return send({ jsonrpc: "2.0", id, result: { tools: IS_SUBAGENT ? [] : TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) } });
-    if (method === "tools/call") {
-      const tool = IS_SUBAGENT ? null : TOOLS.find((t) => t.name === (params && params.name));
-      if (!tool) return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: IS_SUBAGENT ? INSTRUCTIONS : "Unknown tool " + (params && params.name) }], isError: true } });
-      try {
-        return send({ jsonrpc: "2.0", id, result: result(await tool.run((params && params.arguments) || {})) });
-      } catch (e) {
-        return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: errText(e) }], isError: true } });
-      }
-    }
-    if (method === "resources/list") return send({ jsonrpc: "2.0", id, result: { resources: [] } });
-    if (method === "prompts/list") return send({ jsonrpc: "2.0", id, result: { prompts: [] } });
-    if (!isRequest) return;
-    send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found: " + method } });
-  } catch (e) {
-    if (isRequest) send({ jsonrpc: "2.0", id, error: { code: -32603, message: errText(e) } });
-  }
-}
+  },
+  "resources/list": () => ({ resources: [] }),
+  "prompts/list": () => ({ prompts: [] }),
+};
 
 let ending = false;
 function shutdown() {
@@ -573,32 +626,16 @@ function shutdown() {
     q.endSubs.run(SESSION);
     q.endSession.run(Date.now(), SESSION);
   });
-  setTimeout(() => process.exit(0), 300);
+  // Wait for the agents' process trees to be killed (at most 8 seconds), so
+  // none outlive this server.
+  const exit = () => process.exit(0);
+  Promise.race([Promise.allSettled([...kills]), new Promise((r) => setTimeout(r, 8000))]).then(exit, exit);
 }
 
 if (require.main === module) {
-  let buffer = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    buffer += chunk;
-    let nl;
-    while ((nl = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (Array.isArray(msg)) msg.forEach(handle);
-      else handle(msg);
-    }
-  });
-  process.stdin.on("end", shutdown);
+  serve(methods, shutdown);
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 }
 
-module.exports = { TOOLS, handle };
+module.exports = { TOOLS, methods };

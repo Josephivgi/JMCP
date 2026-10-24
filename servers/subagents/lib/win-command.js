@@ -120,7 +120,8 @@ function spawnArgv(command, args) {
 
 function spawnHidden(command, args, options) {
   const argv = spawnArgv(command, args);
-  return spawn(
+  const startedAt = Date.now();
+  const child = spawn(
     argv.command,
     argv.args,
     Object.assign(
@@ -131,28 +132,72 @@ function spawnHidden(command, args, options) {
       options || {},
     ),
   );
+  return watch(child, startedAt);
+}
+
+// Records when a child started (startedAt: Date.now() taken just before
+// spawn, so it is never later than the process's creation) and when it
+// ended, so killTree can still find what it left running after it exited.
+// Every child that killTree may kill goes through this.
+function watch(child, startedAt) {
+  child.jmcpStartedAt = startedAt;
+  child.once("exit", () => {
+    child.jmcpExitedAt = Date.now();
+  });
+  return child;
+}
+
+const exited = (child) => child.exitCode != null || child.signalCode != null;
+
+// Resolves with the exit code (null when it could not start).
+function runHidden(command, args) {
+  return new Promise((resolve) => {
+    const t = spawn(command, args, { windowsHide: true, stdio: "ignore" });
+    t.on("error", () => resolve(null));
+    t.on("close", (code) => resolve(code));
+  });
+}
+
+// Windows: processes a dead parent started. Its pid may have belonged to
+// other processes before it and after it, so only children created while it
+// ran count. A dead middle process still hides what it started; finding those
+// would need a Windows job object.
+function killOrphans(pid, startedAt, exitedAt) {
+  const at = (ms) => "[DateTimeOffset]::FromUnixTimeMilliseconds(" + Math.floor(ms) + ").LocalDateTime";
+  const script =
+    "$a = " + at(startedAt) + "; $b = " + at(exitedAt) + "; " +
+    "Get-CimInstance Win32_Process -Filter 'ParentProcessId=" + Number(pid) + "' | " +
+    "Where-Object { $_.CreationDate -ge $a -and $_.CreationDate -le $b } | " +
+    "ForEach-Object { taskkill /pid $_.ProcessId /t /f | Out-Null }";
+  return runHidden("powershell.exe", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script]);
 }
 
 // child.kill() signals only the direct child. cmd.exe wrappers and adapters
 // that spawn their own helpers (codex-acp runs codex app-server) leave a live
-// grandchild holding the pipes, so kills go through the process tree.
+// grandchild holding the pipes, so kills go through the process tree, also
+// after the child itself has exited. Resolves once the kill is done, so a
+// caller about to exit can wait for it.
 function killTree(child) {
-  if (!child) return;
+  if (!child) return Promise.resolve();
   const pid = child.pid;
   if (pid && process.platform === "win32") {
-    try {
-      spawn("taskkill", ["/pid", String(pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" })
-        .on("error", () => {})
-        .unref();
-      return;
-    } catch {
-      /* fall through to a plain kill */
-    }
+    const orphans = () => {
+      // Without both times the pid cannot be matched safely; leave it.
+      if (!child.jmcpStartedAt || !child.jmcpExitedAt) return Promise.resolve();
+      return killOrphans(pid, child.jmcpStartedAt, child.jmcpExitedAt);
+    };
+    if (exited(child)) return orphans();
+    // taskkill fails when the child exits just before it looks; then what it
+    // left behind is found as orphans. The exit event can lag, so wait for it.
+    return runHidden("taskkill", ["/pid", String(pid), "/t", "/f"]).then((code) => {
+      if (code === 0) return undefined;
+      return new Promise((r) => (exited(child) ? r() : (child.once("exit", r), setTimeout(r, 1000).unref()))).then(() => (exited(child) ? orphans() : undefined));
+    });
   }
   if (pid && process.platform !== "win32") {
     try {
       process.kill(-pid, "SIGKILL");
-      return;
+      return Promise.resolve();
     } catch {
       /* not a group leader or already gone */
     }
@@ -162,6 +207,7 @@ function killTree(child) {
   } catch {
     /* gone */
   }
+  return Promise.resolve();
 }
 
 module.exports = {
@@ -170,5 +216,7 @@ module.exports = {
   unwrapNpmCmd,
   spawnArgv,
   spawnHidden,
+  watch,
+  killOrphans,
   killTree,
 };

@@ -6,16 +6,17 @@
 // JMCP app can restore.
 
 const store = require("./lib/store.js");
+const { rpcError, serve, checkArgs } = require("./lib/rpc.js");
 const PROTOCOLS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const VERSION = require("./package.json").version;
 const NAMES = store.NAMES.join(", ");
 
-const pathProp = { type: "string", description: "Absolute path to the file. The name must be one of " + NAMES + "." };
+const pathProp = { type: "string", description: "Absolute path to the file. The name must be one of " + NAMES + ", or it must be a .md file directly in ~/.claude/rules (Claude Code rules)." };
 
 const TOOLS = [
   {
     name: "list",
-    description: "List instruction files: each agent's global file (made or not) and every project folder saved in JMCP. Pass folder to also list the files in that folder, such as your working folder.",
+    description: "List instruction files: each agent's global file (made or not), Claude Code rules in ~/.claude/rules, project folders saved in JMCP and other folders found with instruction files. Pass folder to also list the files in that folder, such as your working folder.",
     inputSchema: { type: "object", properties: { folder: { type: "string", description: "Absolute folder to also look in." } } },
     annotations: { readOnlyHint: true },
   },
@@ -30,7 +31,7 @@ const TOOLS = [
     description: "Create or replace an instruction file with the full new content. Read it first and pass its hash so changes made since are not lost. The old version is kept and can be restored in the JMCP app.",
     inputSchema: {
       type: "object",
-      properties: { path: pathProp, content: { type: "string", description: "The whole new file." }, hash: { type: "string", description: "Hash from read. Use an empty string for a new file." } },
+      properties: { path: pathProp, content: { type: "string", description: "The whole new file." }, hash: { type: "string", description: "Hash from read. Required to replace a file that exists. Leave it out or empty only for a new file." } },
       required: ["path", "content"],
     },
     annotations: { destructiveHint: false, idempotentHint: true },
@@ -47,9 +48,16 @@ function size(n) {
   return n < 1024 ? n + " B" : (n / 1024).toFixed(1) + " KB";
 }
 
-function listText(r) {
+function listText(r, detected) {
   const lines = ["Agent instruction files:"];
   for (const f of r.agents) lines.push("- " + f.agent + ": " + f.path + (f.exists ? " (" + size(f.size) + ")" : " (not made yet)"));
+  lines.push("", "Claude Code rules (every .md file in " + store.rulesDir() + " is read by Claude Code):");
+  if (r.rules.length) for (const f of r.rules) lines.push("- " + f.path + " (" + size(f.size) + ")");
+  else lines.push("- none yet");
+  if (detected.length) {
+    lines.push("", "Other folders with instruction files (found, not saved in JMCP):");
+    for (const d of detected) for (const f of d.files) lines.push("- " + f.path + " (" + size(f.size) + ")");
+  }
   if (r.folders.length) {
     lines.push("", "Project folders:");
     for (const d of r.folders) {
@@ -63,13 +71,20 @@ function listText(r) {
 
 function call(name, a) {
   a = a || {};
-  if (name === "list") return listText(store.list(undefined, a.folder || undefined));
+  if (name === "list") {
+    const r = store.list(undefined, a.folder || undefined);
+    const shown = r.folders.map((d) => d.path);
+    const same = (x, y) => (process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y);
+    const detected = store.detectFolders().filter((d) => !shown.some((p) => same(p, d.path))).slice(0, 40);
+    return listText(r, detected);
+  }
   if (name === "read") {
     const r = store.read(a.path);
     return "Path: " + r.path + "\nHash: " + r.hash + "\n\n" + r.text;
   }
   if (name === "write") {
-    const r = store.write(undefined, a.path, a.content, { by: "agent", expectedHash: typeof a.hash === "string" ? a.hash : undefined });
+    // A write with no hash may only create a file, never replace one.
+    const r = store.write(undefined, a.path, a.content, { by: "agent", expectedHash: typeof a.hash === "string" ? a.hash.trim() : "" });
     if (!r.changed) return "No change: " + r.path + " already has that content.";
     return (r.created ? "Created " : "Saved ") + r.path + ". New hash: " + r.hash + (r.created ? "" : ". The old version can be restored in the JMCP app.");
   }
@@ -80,65 +95,33 @@ function call(name, a) {
   throw new Error("Unknown tool " + name);
 }
 
-function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + "\n");
-}
-
-function handle(msg) {
-  const { id, method, params } = msg || {};
-  const isRequest = id !== undefined && id !== null;
-  try {
-    if (method === "initialize") {
-      const asked = params && params.protocolVersion;
-      return send({
-        jsonrpc: "2.0", id,
-        result: {
-          protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "jmcp-instructions", title: "JMCP Instructions", version: VERSION },
-          instructions: "Use these tools when the user asks to see, change, create or remove agent instruction files (" + NAMES + "), for one agent or a project. Read a file before writing it and pass its hash. Delete only when the user asks; deleted and replaced files can be restored in the JMCP app.",
-        },
-      });
+const methods = {
+  initialize(params) {
+    const asked = params.protocolVersion;
+    return {
+      protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
+      capabilities: { tools: { listChanged: false } },
+      serverInfo: { name: "jmcp-instructions", title: "JMCP Instructions", version: VERSION },
+      instructions: "Use these tools when the user asks to see, change, create or remove agent instruction files (" + NAMES + ", and Claude Code rules in ~/.claude/rules), for one agent or a project. Read a file before writing it and pass its hash. Delete only when the user asks; deleted and replaced files can be restored in the JMCP app.",
+    };
+  },
+  ping: () => ({}),
+  "tools/list": () => ({ tools: TOOLS }),
+  "tools/call"(params) {
+    const tool = TOOLS.find((t) => t.name === params.name);
+    if (!tool) throw rpcError(-32602, "Unknown tool " + params.name);
+    const wrong = checkArgs(tool.inputSchema, params.arguments);
+    if (wrong) return { content: [{ type: "text", text: "Invalid arguments: " + wrong }], isError: true };
+    try {
+      return { content: [{ type: "text", text: call(params.name, params.arguments) }], isError: false };
+    } catch (e) {
+      return { content: [{ type: "text", text: String(e.message || e) }], isError: true };
     }
-    if (method === "ping") return isRequest && send({ jsonrpc: "2.0", id, result: {} });
-    if (method === "tools/list") return send({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
-    if (method === "tools/call") {
-      const name = params && params.name;
-      try {
-        return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: call(name, params.arguments) }], isError: false } });
-      } catch (e) {
-        return send({ jsonrpc: "2.0", id, result: { content: [{ type: "text", text: String(e.message || e) }], isError: true } });
-      }
-    }
-    if (method === "resources/list") return send({ jsonrpc: "2.0", id, result: { resources: [] } });
-    if (method === "prompts/list") return send({ jsonrpc: "2.0", id, result: { prompts: [] } });
-    if (!isRequest) return;
-    send({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found: " + method } });
-  } catch (e) {
-    if (isRequest) send({ jsonrpc: "2.0", id, error: { code: -32603, message: String(e.message || e) } });
-  }
-}
+  },
+  "resources/list": () => ({ resources: [] }),
+  "prompts/list": () => ({ prompts: [] }),
+};
 
-if (require.main === module) {
-  let buffer = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", (chunk) => {
-    buffer += chunk;
-    let nl;
-    while ((nl = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line) continue;
-      let msg;
-      try {
-        msg = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (Array.isArray(msg)) msg.forEach(handle);
-      else handle(msg);
-    }
-  });
-}
+if (require.main === module) serve(methods);
 
-module.exports = { handle, TOOLS };
+module.exports = { methods, TOOLS };

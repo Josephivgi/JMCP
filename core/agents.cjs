@@ -26,12 +26,19 @@ function dirs(home) {
 
 // ---- File helpers ----
 
+// null when the file is not there; any other read failure throws, so a
+// locked or unreadable config is reported instead of treated as empty.
 function readText(file) {
   try {
     return fs.readFileSync(file, "utf8");
-  } catch {
-    return null;
+  } catch (e) {
+    if (e && (e.code === "ENOENT" || e.code === "ENOTDIR")) return null;
+    throw e;
   }
+}
+
+function readError(file, e) {
+  return "Could not read " + path.basename(file) + " (" + (e.code || String(e.message || e).split("\n")[0]) + ").";
 }
 
 function backup(file) {
@@ -48,11 +55,16 @@ function writeText(file, text) {
 }
 
 function readJson(file) {
-  const text = readText(file);
+  let text;
+  try {
+    text = readText(file);
+  } catch (e) {
+    return { exists: true, data: {}, error: readError(file, e) };
+  }
   if (text == null) return { exists: false, data: {} };
   const errors = [];
   const data = jsonc.parse(text, errors, { allowTrailingComma: true });
-  if (errors.length && (data === undefined || typeof data !== "object")) return { exists: true, data: {}, error: "Could not read " + path.basename(file) + " (not valid JSON)." };
+  if (errors.length || data === undefined || typeof data !== "object") return { exists: true, data: {}, error: "Could not read " + path.basename(file) + " (not valid JSON)." };
   return { exists: true, data: data || {} };
 }
 
@@ -80,17 +92,85 @@ function tomlValue(v) {
   return JSON.stringify(String(v));
 }
 
+// A table header line as { array, parts }: [mcp_servers."my server"] gives
+// parts ["mcp_servers", "my server"]. Quoted keys may hold dots, spaces and
+// brackets. null when the line is not a header.
+function tomlHeader(line) {
+  const open = /^\s*(\[\[?)/.exec(line);
+  if (!open) return null;
+  const array = open[1] === "[[";
+  const re = /\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*/y;
+  re.lastIndex = open[0].length;
+  const parts = [];
+  for (;;) {
+    const m = re.exec(line);
+    if (!m) return null;
+    let part = m[3];
+    if (m[2] != null) part = m[2];
+    if (m[1] != null) {
+      try {
+        part = JSON.parse('"' + m[1] + '"');
+      } catch {
+        part = m[1];
+      }
+    }
+    parts.push(part);
+    if (line[re.lastIndex] !== ".") break;
+    re.lastIndex++;
+  }
+  const close = array ? "]]" : "]";
+  if (!line.startsWith(close, re.lastIndex)) return null;
+  if (!/^\s*(#.*)?$/.test(line.slice(re.lastIndex + close.length))) return null;
+  return { array, parts };
+}
+
+// Whether a multi-line string (""" or ''') is still open after this line.
+// open is the delimiter open before the line, or null.
+function tomlMultiline(line, open) {
+  let i = 0;
+  while (i < line.length) {
+    if (open) {
+      // In a basic """ string a backslash escapes the next character, so
+      // \""" does not close it. Literal ''' strings have no escapes.
+      if (open === '"""' && line[i] === "\\") {
+        i += 2;
+        continue;
+      }
+      if (line.startsWith(open, i)) {
+        i += 3;
+        open = null;
+      } else i++;
+      continue;
+    }
+    const c = line[i];
+    if (c === "#") return null;
+    if (line.startsWith('"""', i) || line.startsWith("'''", i)) {
+      open = line.slice(i, i + 3);
+      i += 3;
+    } else if (c === '"') {
+      i++;
+      while (i < line.length && line[i] !== '"') i += line[i] === "\\" ? 2 : 1;
+      i++;
+    } else if (c === "'") {
+      const at = line.indexOf("'", i + 1);
+      i = at < 0 ? line.length : at + 1;
+    } else i++;
+  }
+  return open;
+}
+
+// Drops [mcp_servers.<name>] and its sub-tables. Any other header, including
+// an array table like [[skills.config]], ends the dropped block. Lines inside
+// multi-line strings are never read as headers.
 function removeTomlServer(text, name) {
   const lines = text.split(/\r?\n/);
-  const head = "mcp_servers." + tomlKey(name);
   const out = [];
   let skipping = false;
+  let open = null;
   for (const line of lines) {
-    const m = line.match(/^\s*\[([^\]]+)\]\s*(#.*)?$/);
-    if (m) {
-      const key = m[1].trim();
-      skipping = key === head || key.startsWith(head + ".");
-    }
+    const h = open ? null : tomlHeader(line);
+    if (h) skipping = !h.array && h.parts[0] === "mcp_servers" && h.parts[1] === name;
+    open = tomlMultiline(line, open);
     if (!skipping) out.push(line);
   }
   while (out.length && !out[out.length - 1].trim()) out.pop();
@@ -113,7 +193,12 @@ function tomlServerBlock(name, entry) {
 }
 
 function readToml(file) {
-  const text = readText(file);
+  let text;
+  try {
+    text = readText(file);
+  } catch (e) {
+    return { exists: true, data: {}, error: readError(file, e) };
+  }
   if (text == null) return { exists: false, data: {} };
   try {
     return { exists: true, data: TOML.parse(text) };
@@ -122,16 +207,35 @@ function readToml(file) {
   }
 }
 
+// Never write a TOML file that no longer parses: the agent would lose every
+// setting in it, not only the server.
+function writeToml(file, before, after) {
+  let ok = true;
+  try {
+    TOML.parse(before);
+  } catch {
+    ok = false;
+  }
+  if (ok) {
+    try {
+      TOML.parse(after);
+    } catch (e) {
+      throw new Error("JMCP did not change " + path.basename(file) + ": the edit would break it (" + String(e.message).split("\n")[0] + ").");
+    }
+  }
+  writeText(file, after);
+}
+
 function setTomlServer(file, name, entry) {
   const text = readText(file) || "";
   let out = removeTomlServer(text, name);
   out = (out.trim() ? out.replace(/\s*$/, "\n\n") : "") + tomlServerBlock(name, entry);
-  writeText(file, out);
+  writeToml(file, text, out);
 }
 
 function deleteTomlServer(file, name) {
   const text = readText(file);
-  if (text != null) writeText(file, removeTomlServer(text, name));
+  if (text != null) writeToml(file, text, removeTomlServer(text, name));
 }
 
 // ---- Normal shape ----
@@ -167,9 +271,15 @@ function serverMap(data, o) {
   return Object.assign({}, flat, inner || {});
 }
 
+// Where a server goes: the nested map when it already holds the server (the
+// agent reads that one first) or when the file uses the nested layout.
 function keyPath(data, o, name) {
   const top = (data && data[o.key]) || {};
-  if (o.nested && top[o.nested] && typeof top[o.nested] === "object" && !top[name]) return [o.key, o.nested, name];
+  // Same test as serverMap: a "servers" entry with a command or url is a
+  // server of that name, not the nested map.
+  const n = o.nested && top[o.nested];
+  const inner = n && typeof n === "object" && !n.command && !n.url ? n : null;
+  if (inner && (inner[name] || !top[name])) return [o.key, o.nested, name];
   return [o.key, name];
 }
 
@@ -200,14 +310,29 @@ function jsonAgent(o) {
       const file = o.file(d);
       const j = readJson(file);
       if (j.error) throw new Error(j.error + " JMCP did not change it.");
-      editJson(file, keyPath(j.data, o, name), o.toEntry(def));
+      const where = keyPath(j.data, o, name);
+      editJson(file, where, o.toEntry(def));
+      // A flat copy beside the nested one would be shadowed and go stale.
+      const top = (j.data && j.data[o.key]) || {};
+      if (where.length === 3 && top[name] && typeof top[name] === "object") editJson(file, [o.key, name], undefined);
     },
+    // Removes the server from every file the agent reads, not only the one
+    // JMCP writes: it may have been added to the other one.
     remove(d, name) {
-      const file = o.file(d);
-      const j = readJson(file);
-      if (!j.exists || !serverMap(j.data, o)[name]) return false;
-      editJson(file, keyPath(j.data, o, name), undefined);
-      return true;
+      const files = [o.file(d)].concat(o.alsoReads ? o.alsoReads(d) : []).filter((f, i, all) => all.indexOf(f) === i);
+      let removed = false;
+      for (const file of files) {
+        const j = readJson(file);
+        if (!j.exists || j.error) continue;
+        // Both layouts can hold it: { mcp: { demo } } and { mcp: { servers: { demo } } }.
+        const top = (j.data && j.data[o.key]) || {};
+        const paths = [];
+        if (top[name] && typeof top[name] === "object") paths.push([o.key, name]);
+        if (o.nested && top[o.nested] && typeof top[o.nested] === "object" && top[o.nested][name]) paths.push([o.key, o.nested, name]);
+        for (const p of paths) editJson(file, p, undefined);
+        if (paths.length) removed = true;
+      }
+      return removed;
     },
   };
 }
@@ -391,4 +516,4 @@ function uninstall(agentId, name, home) {
   return { agent: a.id, name, removed: a.remove(dirs(home), name), file: a.file(dirs(home)) };
 }
 
-module.exports = { AGENTS, agentById, scan, install, uninstall, dirs, _toml: { removeTomlServer, tomlServerBlock } };
+module.exports = { AGENTS, agentById, scan, install, uninstall, dirs, _toml: { removeTomlServer, tomlServerBlock, tomlHeader } };

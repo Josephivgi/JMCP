@@ -28,6 +28,11 @@ let home = "";
 const hi = argv.indexOf("--home");
 if (hi >= 0) {
   home = argv[hi + 1];
+  // Without a folder the command would run on the real home.
+  if (!home || home.startsWith("--")) {
+    console.error("--home needs a folder, for example --home C:\\temp\\jmcp-test.");
+    process.exit(2);
+  }
   argv.splice(hi, 2);
 }
 const json = argv.includes("--json");
@@ -35,8 +40,13 @@ const force = argv.includes("--force");
 const args = argv.filter((a) => a !== "--json" && a !== "--force");
 const [cmd, ...rest] = args;
 
+// Prints the result. Any failed item (ok: false, at the top or in results)
+// makes the command exit with 1, so scripts can tell.
 function out(value, text) {
   console.log(json ? JSON.stringify(value, null, 2) : text());
+  const items = Array.isArray(value) ? value : [value];
+  const failed = items.some((x) => x && (x.ok === false || (Array.isArray(x.results) && x.results.some((r) => r && r.ok === false))));
+  if (failed) process.exitCode = 1;
 }
 
 async function main() {

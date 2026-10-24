@@ -3,8 +3,8 @@
 // One skills library for the app and every installed agent. A skill is a
 // named set of instructions (the SKILL.md format: name, description, body)
 // that an agent loads when a task matches its description. Skills are made
-// in the JMCP app or imported from agents' skill folders; agents only read
-// them.
+// in the JMCP app, imported from agents' skill folders, or saved by agents
+// with skill_save.
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -68,8 +68,13 @@ function list(home) {
   return withDb(home, (db) => db.prepare("SELECT * FROM skills ORDER BY name").all().map(row));
 }
 
-function get(home, ref) {
-  return withDb(home, (db) => row(db.prepare("SELECT * FROM skills WHERE id = ? OR name = ?").get(String(ref), slug(ref))));
+// One skill. Agents name skills, so opts.byName looks at names only; the
+// app passes ids. Without it: by id, else by name, never both.
+function get(home, ref, opts) {
+  return withDb(home, (db) => {
+    const byName = () => db.prepare("SELECT * FROM skills WHERE name = ?").get(slug(ref));
+    return row(opts && opts.byName ? byName() : db.prepare("SELECT * FROM skills WHERE id = ?").get(String(ref)) || byName());
+  });
 }
 
 function add(home, { name, description, body, origin } = {}) {
@@ -101,6 +106,35 @@ function update(home, id, patch) {
     const keys = Object.keys(changes);
     if (keys.length) db.prepare("UPDATE skills SET " + keys.map((k) => k + " = ?").join(", ") + ", updated_at = ? WHERE id = ?").run(...keys.map((k) => changes[k]), Date.now(), id);
     return row(db.prepare("SELECT * FROM skills WHERE id = ?").get(id));
+  });
+}
+
+// Add a skill, or replace the one with that name, in one transaction so two
+// agents saving the same name at once cannot collide. Skills imported from a
+// SKILL.md file are not replaced. Returns { skill, created }.
+function save(home, { name, description, body } = {}) {
+  const key = nameValue(name);
+  description = descriptionValue(description);
+  body = bodyValue(body);
+  return withDb(home, (db) => {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const old = db.prepare("SELECT * FROM skills WHERE name = ?").get(key);
+      if (old && old.origin) throw new Error("Not saved: " + key + " comes from " + old.origin + ". Edit that SKILL.md file; JMCP picks up the change on the next import.");
+      const now = Date.now();
+      let id = old && old.id;
+      if (old) db.prepare("UPDATE skills SET description = ?, body = ?, updated_at = ? WHERE id = ?").run(description, body, now, id);
+      else {
+        id = crypto.randomUUID();
+        db.prepare("INSERT INTO skills (id, name, description, body, enabled, origin, created_at, updated_at) VALUES (?, ?, ?, ?, 1, '', ?, ?)").run(id, key, description, body, now, now);
+      }
+      const skill = row(db.prepare("SELECT * FROM skills WHERE id = ?").get(id));
+      db.exec("COMMIT");
+      return { skill, created: !old };
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
   });
 }
 
@@ -199,7 +233,7 @@ function importFiles(home, files) {
     try {
       const s = readSkillFile(file);
       if (!s.description) throw new Error("SKILL.md has no description.");
-      const old = get(home, s.name);
+      const old = get(home, s.name, { byName: true });
       if (old && old.origin !== s.file) {
         results.push({ ok: false, file, name: s.name, error: "A skill named " + s.name + " is already in the library." });
         continue;
@@ -241,9 +275,13 @@ function supportFiles(skill) {
   return out;
 }
 
-// The list agents get when the server starts.
-function index(skills) {
-  return skills.map((s) => "- " + s.name + ": " + s.description.replace(/\s+/g, " ")).join("\n");
+// The list agents get: one line per skill. max caps how many are shown, so
+// a large library cannot flood an agent's context.
+function index(skills, max) {
+  const shown = skills.slice(0, max || 200);
+  const lines = shown.map((s) => "- " + s.name + ": " + s.description.replace(/\s+/g, " ").slice(0, 400));
+  if (skills.length > shown.length) lines.push("- ... and " + (skills.length - shown.length) + " more. Call skills_list with query to search them all.");
+  return lines.join("\n");
 }
 
-module.exports = { list, get, add, update, remove, active, parseSkillMd, readSkillFile, findSkillFiles, importFiles, supportFiles, index, slug };
+module.exports = { list, get, add, update, save, remove, active, parseSkillMd, readSkillFile, findSkillFiles, importFiles, supportFiles, index, slug };

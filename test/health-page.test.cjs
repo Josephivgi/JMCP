@@ -115,7 +115,7 @@ test("host check output is parsed and judged", () => {
   assert.strictEqual(r.loadPct, 175);
   assert.strictEqual(r.memory.usedPct, 95);
   assert.strictEqual(r.swap.usedPct, 60);
-  assert.deepStrictEqual(r.disks.map((d) => [d.mount, d.usedPct]), [["/", 98]]);
+  assert.deepStrictEqual(r.disks.map((d) => [d.mount, d.usedPct]), [["/", 98], ["/boot/efi", 20]]);
   assert.deepStrictEqual(r.failed, ["nginx.service"]);
   assert.deepStrictEqual(r.containers, { running: 3, stopped: 1 });
   const p = quick.hostProblems(r).map((x) => x.level + ": " + x.text);
@@ -147,4 +147,61 @@ test("waiting updates are parsed and the update script is safe", () => {
   const sim = quick.updateScript(true);
   assert.match(sim, /apt-get -s -q \$P \$M/);
   assert.doesNotMatch(sim, /apt-get update|apt-get -y/);
+});
+
+test("update script never removes packages; checks must finish; small partitions count", () => {
+  const real = quick.updateScript(false);
+  assert.match(real, /P='--no-remove /);
+  assert.match(quick.HOST_SH, /echo jmcp_done=1\n$/);
+  const r = quick.parseHost(["os=Ubuntu", "disk=500000 1000 /boot", "disk=100 1 /tiny"].join("\n"));
+  assert.deepStrictEqual(r.disks.map((d) => d.mount), ["/boot"]);
+  assert.ok(quick.hostProblems(r).some((p) => /\/boot is 100% full/.test(p.text)));
+});
+
+test("decompressed page bodies are capped and say they were cut", async () => {
+  const zlib = require("node:zlib");
+  const page = require("../servers/health/lib/page.js");
+  const bomb = zlib.gzipSync(Buffer.concat([Buffer.from("<html><head>"), Buffer.alloc(16 * 1024 * 1024, 32)]));
+  const big = await page.inflate(bomb, "gzip");
+  assert.strictEqual(big.body.length, 4 * 1024 * 1024);
+  assert.strictEqual(big.cut, true);
+  assert.match(big.body.slice(0, 12).toString(), /<html><head>/);
+  const small = await page.inflate(zlib.gzipSync(Buffer.from("hi")), "gzip");
+  assert.deepStrictEqual([small.body.toString(), small.cut], ["hi", false]);
+  const p = { timing: { dnsMs: 0, connectMs: 0, tlsMs: 0, waitMs: 0, downloadMs: 0 }, redirectMs: 0, wireBytes: 5e6, cut: true, status: 200 };
+  assert.ok(page.pageProblems(p, page.inspectHtml("", "")).some((x) => /first 4 MB/.test(x.title)));
+  // A body that says gzip but is not decodes to nothing and is reported.
+  const bad = await page.inflate(Buffer.from("not gzip"), "gzip");
+  assert.strictEqual(bad.broken, true);
+  // A gzip body cut short keeps what decoded and counts as broken.
+  const whole = zlib.gzipSync(Buffer.from("<html>" + "x".repeat(50000)));
+  const short = await page.inflate(whole.subarray(0, whole.length - 30), "gzip");
+  assert.strictEqual(short.broken, true);
+  assert.match(short.body.slice(0, 6).toString(), /<html>/);
+  const q = Object.assign({}, p, { cut: false, broken: true });
+  assert.ok(page.pageProblems(q, page.inspectHtml("", "")).some((x) => /did not load or decode/.test(x.title)));
+});
+
+test("a dnf preview that cannot resolve fails with dnf's error", () => {
+  const s = require("../servers/health/lib/quick.js").updateScript(true);
+  assert.match(s, /grep -q '\^Error'/);
+  assert.match(s, /exit 5/);
+});
+
+test("update scripts force English apt output and keep dnf from removing packages", () => {
+  const quick = require("../servers/health/lib/quick.js");
+  assert.match(quick.HOST_SH, /export LC_ALL=C/);
+  for (const sim of [true, false]) {
+    const s = quick.updateScript(sim);
+    assert.match(s, /export LC_ALL=C/);
+    assert.match(s, /--setopt=obsoletes=0 --setopt=installonly_limit=0/);
+  }
+  assert.match(quick.updateScript(true), /print "Plan "/);
+});
+
+test("guest CPU time is not counted twice", () => {
+  const quick = require("../servers/health/lib/quick.js");
+  // 100 ticks of user time, half of it guest time, and 100 idle.
+  const r = quick.parseHost("stat1=cpu 0 0 0 0 0 0 0 0 0 0\nstat2=cpu 100 0 0 100 0 0 0 0 50 0\njmcp_done=1\n");
+  assert.strictEqual(r.cpuPct, 50);
 });

@@ -1,7 +1,8 @@
 # jmcp-health
 
 Checks this computer or an SSH host and explains what is wrong, in plain
-words, worst first. Read-only: it never changes anything on the target.
+words, worst first. Read-only, except `updates` with `install: true`, which
+installs package updates on an SSH host when asked.
 
 ## Tools
 
@@ -11,9 +12,10 @@ words, worst first. Read-only: it never changes anything on the target.
 | `problems` | Every problem found, with evidence, why it matters and a fix |
 | `slow_text` | Why text might take a second to show in the browser. With `url`, also loads that page from the target and times DNS, connect, TLS, server wait and download, and checks the HTML and CSS for web fonts without `font-display: swap`, render-blocking CSS/JS and pages built by JavaScript |
 | `glitchy` | Why the computer might stutter, freeze, flicker or crash |
+| `updates` | Pending package updates on an SSH host (apt or dnf) and what would be installed. With `install: true`, installs them like the Health page does: keeps config files, removes nothing, never reboots |
 | `show_user` | Leaves the user a card (title, details, level) on the Health page of the JMCP app |
 
-Each tool takes `target`: `local` (default), an alias from `~/.ssh/config`, or
+Each tool except `updates` and `show_user` takes `target`: `local` (default), an alias from `~/.ssh/config`, or
 `user@host`.
 
 ## What it checks

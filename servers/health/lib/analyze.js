@@ -93,7 +93,7 @@ function analyze(f) {
     add("high", "disk", ["text", "glitch"], "Disk is saturated (" + io.busyPct + "% busy, " + Math.round((io.avgSecPerTransfer || 0) * 1000) + " ms per request)", "Queue " + io.queue,
       "Each disk request takes long enough to notice. Opening apps, loading cached pages and saving files all wait on it.", "Find the process hammering the disk in Resource Monitor > Disk; on an HDD, an SSD is the fix.");
   for (const d of f.physicalDisks || []) {
-    if (d.health && !/healthy/i.test(d.health))
+    if (d.health && !/^healthy$/i.test(String(d.health).trim()))
       add("high", "disk", ["glitch"], "Disk " + d.name + " reports " + d.health, d.media + " " + d.bus, "A failing drive causes freezes, corrupt files and crashes, and can lose data.", "Back up now, then replace the drive.");
     if (/HDD/i.test(d.media) && (f.disks || []).length)
       add("medium", "disk", ["text", "glitch"], d.name + " is a spinning hard drive", d.sizeGB + " GB " + d.media,

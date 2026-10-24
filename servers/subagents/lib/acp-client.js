@@ -5,7 +5,7 @@ const { acpPermissionResult } = require("./acp-permissions");
 const { readTextFile, writeTextFile } = require("./acp-fs");
 const { acpBlocks } = require("./attachments");
 const { spawn } = require("child_process");
-const { spawnHidden, killTree } = require("./win-command");
+const { spawnHidden, killTree, watch } = require("./win-command");
 
 // Kept output per terminal: enough for the agent to read results, bounded so
 // a runaway child cannot grow memory without bound.
@@ -68,6 +68,8 @@ class AcpClient {
     this.turnCalls = new Set();
     this.turnCancelled = false;
     this.termExits = new Map();
+    // Kills still running, so stop can wait for all of them.
+    this.kills = new Set();
     this.promptCapabilities = { image: false, audio: false, embeddedContext: false };
   }
 
@@ -255,7 +257,7 @@ class AcpClient {
       const existing = this.termProcs.get(id);
       if (existing) {
         try {
-          if (existing.child) killTree(existing.child);
+          if (existing.child) this._kill(existing.child);
         } catch {
           /* gone */
         }
@@ -278,7 +280,7 @@ class AcpClient {
       // the hub/renderer see a bounded flush rate.
       const flush = () => {
         rec.flushTimer = null;
-        if (!rec.flushPending) return;
+        if (!rec.flushPending || rec.released) return;
         rec.flushPending = false;
         this.terminals.handle("terminal/output", { terminalId: id, output: rec.output });
         this.onTerminal({
@@ -288,6 +290,8 @@ class AcpClient {
         });
       };
       const onChunk = (chunk) => {
+        // Output that arrives after release would bring the terminal back.
+        if (rec.released) return;
         // Terminal output is not the agent talking; the agent's own frames
         // (session updates, output polls) keep the watchdog alive, so a
         // spewing child cannot pin a dead turn open forever. Keep a tail
@@ -309,8 +313,9 @@ class AcpClient {
         // Agents (Devin) send a whole shell line as `command` with no args.
         // Spawning that as a program name fails with ENOENT, so a line runs
         // through the shell; a bare program with args spawns directly.
+        const startedAt = Date.now();
         const child = !args.length && /\s/.test(String(command).trim())
-          ? spawn(String(command), Object.assign({ shell: true, windowsHide: true }, opts))
+          ? watch(spawn(String(command), Object.assign({ shell: true, windowsHide: true }, opts)), startedAt)
           : spawnHidden(command, args, opts);
         rec.child = child;
         if (child.stdout) child.stdout.on("data", onChunk);
@@ -349,7 +354,7 @@ class AcpClient {
       if (rec.exitCode != null || rec.signal != null) out.exitStatus = { exitCode: rec.exitCode, signal: rec.signal };
       return out;
     }
-    // A released or hub-only terminal still owes the agent an exitStatus
+    // A hub-only terminal still owes the agent an exitStatus
     // when it has one; an agent polling output instead of wait_for_exit
     // would otherwise wait forever. Unknown ids error like wait_for_exit.
     if (!this.terminals.has(id)) throw new Error("Unknown terminal id: " + (id || "(missing)"));
@@ -376,28 +381,43 @@ class AcpClient {
     const rec = this.termProcs.get(id);
     if (rec && rec.child) {
       try {
-        killTree(rec.child);
+        this._kill(rec.child);
       } catch {
         /* gone */
       }
     }
-    // release means the agent is done with the terminal; the record goes
-    // with it. kill keeps the output readable for one last poll. Either way
-    // any pending wait_for_exit must resolve, not dangle.
+    // release means the agent is done with the terminal; the record, its
+    // output and its exit status go with it (ACP: the id is invalid after
+    // release), so a long session cannot pile up terminals. kill keeps the
+    // output readable for one last poll. Either way any pending
+    // wait_for_exit must resolve, not dangle.
     if (release) {
       if (rec) {
+        rec.released = true;
         if (rec.flushTimer) clearTimeout(rec.flushTimer);
         if (rec.finish) rec.finish(rec.exitCode, rec.signal);
       }
       this.termProcs.delete(id);
+      this.termExits.delete(id);
+      if (typeof this.terminals.release === "function") this.terminals.release(id);
     }
     return {};
   }
 
+  _kill(child) {
+    const p = Promise.resolve(killTree(child)).catch(() => {});
+    this.kills.add(p);
+    p.then(() => this.kills.delete(p));
+    return p;
+  }
+
+  // Returns the kills, so stop can wait for them.
   _reapTerminals() {
+    const kills = [];
     for (const [id, rec] of this.termProcs) {
+      rec.released = true;
       try {
-        if (rec.child) killTree(rec.child);
+        if (rec.child) kills.push(this._kill(rec.child));
       } catch {
         /* gone */
       }
@@ -406,6 +426,7 @@ class AcpClient {
       this.termExits.delete(id);
     }
     this.termProcs.clear();
+    return kills;
   }
 
   request(method, params, timeoutMs) {
@@ -833,14 +854,17 @@ class AcpClient {
     this.started = false;
     this.initialized = false;
     this._rejectPending(new Error("ACP client stopped"));
-    this._reapTerminals();
+    const kills = this._reapTerminals();
+    let killed = Promise.resolve();
     if (this.child) {
+      // Kill first, while the tree can still be found: an agent that exits on
+      // end of input would be gone before taskkill looks.
+      killed = this._kill(this.child);
       try {
         if (this.child.stdin) this.child.stdin.end();
       } catch {
         /* gone */
       }
-      killTree(this.child);
       try {
         this.child.unref();
       } catch {
@@ -849,6 +873,8 @@ class AcpClient {
       this.child = null;
     }
     this.started = false;
+    // Resolves once every kill is done, so a server about to exit can wait.
+    return Promise.all([...this.kills, ...kills, killed]).then(() => {});
   }
 }
 

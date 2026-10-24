@@ -23,7 +23,13 @@ function createFrameParser(onMessage) {
       buffer = nl < 0 ? Buffer.alloc(0) : buffer.slice(nl + 1);
     }
     while (buffer.length) {
-      const headerEnd = buffer.indexOf("\r\n\r\n");
+      // A frame starts with its header. Look only at the start of the buffer:
+      // a later frame's blank line must not swallow NDJSON lines before it,
+      // and a header split across chunks waits for the rest instead of being
+      // read as a line.
+      const framed = /^\s*Content-Length:/i.test(buffer.slice(0, 64).toString("latin1"));
+      const headerEnd = framed ? buffer.indexOf("\r\n\r\n") : -1;
+      if (framed && headerEnd < 0) return;
       if (headerEnd >= 0) {
         const header = buffer.slice(0, headerEnd).toString("utf8");
         const match = header.match(/Content-Length:\s*(\d+)/i);

@@ -62,14 +62,100 @@ function samePath(a, b) {
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
-// An absolute path whose name is one of NAMES, or an error.
-function checkPath(file) {
+// Claude Code also reads every .md file in ~/.claude/rules.
+function rulesDir(home) {
+  return path.join(userHome(home), ".claude", "rules");
+}
+
+function rulesFiles(home) {
+  const dir = rulesDir(home);
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries.filter((e) => e.isFile() && /\.md$/i.test(e.name)).map((e) => path.join(dir, e.name)).sort();
+}
+
+// An absolute path whose name is one of NAMES, or a .md file directly in
+// ~/.claude/rules, or an error.
+function checkPath(file, home) {
   if (typeof file !== "string" || !file.trim()) throw new Error("path must not be empty.");
   if (!path.isAbsolute(file.trim())) throw new Error("path must be absolute.");
   const full = path.resolve(file.trim());
   const name = NAMES.find((n) => samePath(n, path.basename(full)));
-  if (!name) throw new Error("Only " + NAMES.join(", ") + " files can be managed. Got " + path.basename(full) + ".");
-  return path.join(path.dirname(full), name);
+  if (name) return path.join(path.dirname(full), name);
+  if (/^[^\\/]+\.md$/i.test(path.basename(full)) && samePath(path.dirname(full), rulesDir(home))) {
+    // The rules folder may not exist yet; check the nearest folder that does,
+    // so a linked ~/.claude cannot send a new rules folder somewhere else.
+    let p = rulesDir(home);
+    while (!fs.existsSync(p) && path.dirname(p) !== p) p = path.dirname(p);
+    const base = userHome(home);
+    const expected = path.join(real(base), path.relative(base, p));
+    if (!samePath(real(p), expected)) throw new Error(p + " is a link to another folder, so JMCP will not manage files through it.");
+    return full;
+  }
+  throw new Error("Only " + NAMES.join(", ") + " files, or .md files in " + rulesDir(home) + ", can be managed. Got " + path.basename(full) + ".");
+}
+
+// The real path, following links, or the path itself when it does not exist.
+function real(p) {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return p;
+  }
+}
+
+// A link named like an instruction file must point at one too, so read and
+// the trash never pick up some other file through it.
+function checkLink(file, home) {
+  let l;
+  try {
+    l = fs.lstatSync(file);
+  } catch {
+    return;
+  }
+  // Hard links are allowed: people link CLAUDE.md and AGENTS.md that way, a
+  // write replaces the name with a new file (never writes through it), and
+  // making the link already took access to the other file.
+  if (!l.isSymbolicLink()) return;
+  const target = real(file);
+  try {
+    checkPath(target, home);
+  } catch {
+    throw new Error(file + " is a link to " + target + ", which is not an instruction file.");
+  }
+}
+
+// One writer at a time across the app and every agent: the check, the trash
+// copy and the replace happen inside one immediate transaction. Files are
+// only deleted once it commits (db.afterCommit); backups made in a
+// transaction that rolls back are removed again (db.onRollback).
+function locked(home, fn) {
+  return withDb(home, (db) => {
+    db.afterCommit = [];
+    db.onRollback = [];
+    db.exec("BEGIN IMMEDIATE");
+    let out;
+    try {
+      out = fn(db);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      for (const f of db.onRollback) fs.rmSync(f, { force: true });
+      throw e;
+    }
+    for (const f of db.afterCommit) {
+      try {
+        fs.rmSync(f, { force: true });
+      } catch {
+        /* a locked old backup; the next prune removes it */
+      }
+    }
+    return out;
+  });
 }
 
 function checkFolder(folder) {
@@ -237,7 +323,7 @@ function detectFolders(home) {
 // Every agent's global file (made or not), then each saved folder (and an
 // extra folder, such as the agent's working folder) with the files it has.
 function list(home, extraFolder) {
-  const out = { agents: agentFiles(home).map((a) => info(a.file, { agent: a.agent })), folders: [] };
+  const out = { agents: agentFiles(home).map((a) => info(a.file, { agent: a.agent })), rules: rulesFiles(home).map((f) => info(f)), folders: [] };
   const seen = [];
   const add = (folder, saved) => {
     if (seen.some((f) => samePath(f, folder))) return;
@@ -249,8 +335,9 @@ function list(home, extraFolder) {
   return out;
 }
 
-function read(file) {
-  file = checkPath(file);
+function read(file, home) {
+  file = checkPath(file, home);
+  checkLink(file, home);
   const s = stat(file);
   if (!s) throw new Error("No file at " + file + ".");
   if (s.size > MAX_BYTES) throw new Error(file + " is larger than 1 MB.");
@@ -267,12 +354,16 @@ function keep(home, db, file, reason, by) {
   const id = crypto.randomUUID();
   const dir = trashDir(home);
   fs.mkdirSync(dir, { recursive: true });
-  fs.copyFileSync(file, path.join(dir, id + ".md"));
+  const copy = path.join(dir, id + ".md");
+  fs.copyFileSync(file, copy);
+  if (db.onRollback) db.onRollback.push(copy);
   db.prepare("INSERT INTO trash (id, path, reason, by, size, at) VALUES (?, ?, ?, ?, ?, ?)").run(id, file, reason, by, stat(file).size, Date.now());
   const old = db.prepare("SELECT id FROM trash ORDER BY at DESC, id LIMIT -1 OFFSET ?").all(KEEP_TRASH);
   for (const r of old) {
-    fs.rmSync(path.join(dir, r.id + ".md"), { force: true });
     db.prepare("DELETE FROM trash WHERE id = ?").run(r.id);
+    const f = path.join(dir, r.id + ".md");
+    if (db.afterCommit) db.afterCommit.push(f);
+    else fs.rmSync(f, { force: true });
   }
   return id;
 }
@@ -280,31 +371,47 @@ function keep(home, db, file, reason, by) {
 // Write the whole file. expectedHash (from read) refuses the write when the
 // file changed since it was read. Line endings follow the file being replaced.
 function write(home, file, text, opts) {
-  file = checkPath(file);
+  file = checkPath(file, home);
+  checkLink(file, home);
   if (typeof text !== "string") throw new Error("content must be a string.");
-  if (Buffer.byteLength(text) > MAX_BYTES) throw new Error("content is larger than 1 MB.");
+  // A restore may bring back a file that was already over the limit.
+  const limit = opts && opts.restoring ? Infinity : MAX_BYTES;
+  if (Buffer.byteLength(text) > limit) throw new Error("content is larger than 1 MB.");
   const by = (opts && opts.by) || "app";
-  return withDb(home, (db) => {
+  return locked(home, (db) => {
     const before = stat(file) ? fs.readFileSync(file, "utf8") : null;
-    if (opts && opts.expectedHash !== undefined && opts.expectedHash !== (before === null ? "" : hash(before)))
-      throw new Error(path.basename(file) + " changed on disk since it was opened. Reload it before saving.");
+    const expected = opts && opts.expectedHash;
+    if (expected === "" && before !== null)
+      throw new Error(path.basename(file) + " already exists at " + file + ". Read it first and pass its hash.");
+    if (expected !== undefined && expected !== "" && expected !== (before === null ? "" : hash(before)))
+      throw new Error(before === null ? file + " no longer exists. Write it again with an empty hash to create it." : path.basename(file) + " changed on disk since it was opened. Reload it before saving.");
     if (before !== null && before.includes("\r\n") && !text.includes("\r")) text = text.replace(/\n/g, "\r\n");
+    if (Buffer.byteLength(text) > limit) throw new Error("content is larger than 1 MB once its line endings match the file.");
     if (before === text) return info(file, { hash: hash(text), changed: false, created: false });
     if (before !== null) keep(home, db, file, "replaced", by);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = file + ".jmcp-tmp";
-    fs.writeFileSync(tmp, text);
-    fs.renameSync(tmp, file);
+    // A fresh name each time, created new (wx), so nothing already there is
+    // ever opened or written through.
+    const tmp = file + "." + crypto.randomUUID().slice(0, 8) + ".jmcp-tmp";
+    try {
+      fs.writeFileSync(tmp, text, { flag: "wx" });
+      fs.renameSync(tmp, file);
+    } catch (e) {
+      fs.rmSync(tmp, { force: true });
+      throw e;
+    }
     return info(file, { hash: hash(text), changed: true, created: before === null });
   });
 }
 
 // Move the file into the trash. The app can restore it.
 function remove(home, file, opts) {
-  file = checkPath(file);
+  file = checkPath(file, home);
+  checkLink(file, home);
   if (!stat(file)) throw new Error("No file at " + file + ".");
   const by = (opts && opts.by) || "app";
-  return withDb(home, (db) => {
+  return locked(home, (db) => {
+    if (!stat(file)) throw new Error("No file at " + file + ".");
     const id = keep(home, db, file, "deleted", by);
     fs.rmSync(file);
     return { path: file, trashId: id };
@@ -327,16 +434,20 @@ function restore(home, id) {
   const row = withDb(home, (db) => db.prepare("SELECT * FROM trash WHERE id = ?").get(String(id)));
   if (!row) throw new Error("That copy is no longer in the trash.");
   const text = trashText(home, row.id);
-  const result = write(home, row.path, text, { by: "restore" });
+  const result = write(home, row.path, text, { by: "restore", restoring: true });
   forget(home, row.id);
   return result;
 }
 
+// Drop a copy from the trash. Only ids that are in the trash table, so a
+// made-up id can never name a file outside it.
 function forget(home, id) {
   return withDb(home, (db) => {
-    fs.rmSync(path.join(trashDir(home), String(id) + ".md"), { force: true });
-    return db.prepare("DELETE FROM trash WHERE id = ?").run(String(id)).changes > 0;
+    const row = db.prepare("SELECT id FROM trash WHERE id = ?").get(String(id));
+    if (!row || !/^[0-9a-f-]{36}$/i.test(row.id)) return false;
+    fs.rmSync(path.join(trashDir(home), row.id + ".md"), { force: true });
+    return db.prepare("DELETE FROM trash WHERE id = ?").run(row.id).changes > 0;
   });
 }
 
-module.exports = { NAMES, agentFiles, checkPath, folders, addFolder, removeFolder, detectFolders, hiddenFolders, list, read, write, remove, trash, trashText, restore, forget, hash };
+module.exports = { NAMES, agentFiles, rulesDir, rulesFiles, checkPath, folders, addFolder, removeFolder, detectFolders, hiddenFolders, list, read, write, remove, trash, trashText, restore, forget, hash };
