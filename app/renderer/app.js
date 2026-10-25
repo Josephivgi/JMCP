@@ -79,8 +79,51 @@ function renderSide() {
     ),
   );
   const found = st.agents.filter((a) => a.present).length;
-  document.getElementById("side-foot").textContent = found + " of " + st.agents.length + " agents found";
+  document.getElementById("side-foot").replaceChildren(h("div", { text: found + " of " + st.agents.length + " agents found" }), appUpdateView());
 }
+
+// ---- JMCP updates (GitHub Releases) ----
+
+let appUpd = null; // {status, version, latest, percent, error}
+let appUpdErr = "";
+
+function appUpdateAct(fn) {
+  appUpdErr = "";
+  fn().catch((e) => ((appUpdErr = e.message), renderSide()));
+}
+
+function appUpdateView() {
+  const u = appUpd;
+  if (!u) return null;
+  const line = (text, cls) => h("div", { class: cls || "", text });
+  const btn = (label, onclick, primary) => h("button", { class: "btn small" + (primary ? " primary" : ""), "data-focus-key": "app-update", onclick }, label);
+  const kids = [line("JMCP " + u.version, "side-ver")];
+  if (u.status === "source") {
+    kids.push(line("Running from source. Install JMCP from GitHub Releases to update here."));
+    kids.push(btn("Releases", () => appUpdateAct(api.appUpdate.releases)));
+  } else if (u.status === "checking") {
+    kids.push(line("Checking for updates…"));
+  } else if (u.status === "available") {
+    kids.push(line("JMCP " + u.latest + " is out."));
+    kids.push(btn("Update", () => appUpdateAct(api.appUpdate.download), true));
+  } else if (u.status === "downloading") {
+    kids.push(line("Downloading " + u.latest + ": " + u.percent + "%"));
+  } else if (u.status === "ready") {
+    kids.push(line("JMCP " + u.latest + " is ready. JMCP closes, updates and opens again."));
+    kids.push(btn("Restart to update", () => appUpdateAct(api.appUpdate.install), true));
+  } else {
+    if (u.status === "current") kids.push(line("Up to date."));
+    if (u.status === "error") kids.push(line(u.error, "bad"));
+    kids.push(btn(u.status === "error" ? "Try again" : "Check for updates", () => appUpdateAct(api.appUpdate.check)));
+  }
+  if (appUpdErr) kids.push(line(appUpdErr, "bad"));
+  return h("div", { class: "side-upd", role: "status", "aria-label": "JMCP updates" }, kids);
+}
+
+api.appUpdate.onChange((s) => {
+  appUpd = s;
+  if (st) renderSide();
+});
 
 function head(title, sub, actions) {
   return h("div", { class: "page-head" }, h("div", {}, h("h1", { text: title }), sub ? h("p", { text: sub }) : null), actions ? h("div", { class: "actions" }, actions) : null);
@@ -1119,6 +1162,7 @@ function render() {
 async function load() {
   try {
     st = await api.state();
+    appUpd = await api.appUpdate.state().catch(() => null);
     render();
     // Updates made at start can take a while (the server is copied); show
     // them when they land.

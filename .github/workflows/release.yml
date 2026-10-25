@@ -1,0 +1,47 @@
+# Builds the Windows installer and publishes it as a GitHub Release when a
+# version tag is pushed (npm version patch && git push --follow-tags).
+# The installed JMCP app checks these releases and offers an Update button.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            servers/subagents/package-lock.json
+
+      - name: Check the tag matches package.json
+        shell: bash
+        run: |
+          v="$(node -p "require('./package.json').version")"
+          if [ "v$v" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $v."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      # jmcp-subagents ships with its own node_modules.
+      - run: npm ci --omit=dev
+        working-directory: servers/subagents
+
+      - run: npm test
+
+      - name: Build and publish
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

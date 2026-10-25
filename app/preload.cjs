@@ -64,4 +64,12 @@ contextBridge.exposeInMainWorld("jmcp", {
     remove: (id) => call("health-note-remove", id),
   },
   reveal: (file) => call("reveal", file),
+  appUpdate: {
+    state: () => call("app-update-state"),
+    check: () => call("app-update-check"),
+    download: () => call("app-update-download"),
+    install: () => call("app-update-install"),
+    releases: () => call("app-releases"),
+    onChange: (fn) => ipcRenderer.on("app-update", (_e, s) => fn(s)),
+  },
 });

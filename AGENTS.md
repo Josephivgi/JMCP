@@ -4,7 +4,7 @@ JMCP is an Electron app plus a set of stdio MCP servers that it installs into ev
 
 ## Layout
 
-- `app/`: Electron app. `main.cjs` (IPC handlers), `preload.cjs`, `renderer/*.js` (pages; build DOM with the `h()` helper and text nodes, never `innerHTML` with data).
+- `app/`: Electron app. `main.cjs` (IPC handlers), `preload.cjs`, `updater.cjs` (updates from GitHub Releases), `renderer/*.js` (pages; build DOM with the `h()` helper and text nodes, never `innerHTML` with data).
 - `core/`: shared logic. `catalog.cjs` lists JMCP servers and installs/updates them, `agents.cjs` edits each agent's MCP config (JSON/JSONC/TOML in place, `.jmcp-backup` on first change, never writes a TOML file that no longer parses).
 - `servers/<id>/`: one MCP server each (`subagents`, `rules`, `instructions`, `memory`, `skills`, `health`). Each has `server.cjs`, `lib/`, `package.json` (its version) and `README.md`.
 - `cli/jmcp.cjs`: `node cli/jmcp.cjs list | catalog | install <server> [agents..] | update [server] | probe <agent> <server>`.
@@ -53,4 +53,9 @@ JMCP is an Electron app plus a set of stdio MCP servers that it installs into ev
 ## Writing
 
 - Plain, short sentences in UI text, docs and replies. No em-dashes, no marketing words.
-- Commit messages say what changed for the user. The repo has no git remote yet; commit locally unless told otherwise.
+- Commit messages say what changed for the user. The repo is public at https://github.com/Josephivgi/JMCP.
+
+## Releases
+
+- The app updates itself from GitHub Releases (`app/updater.cjs`, electron-updater). Release with `npm version patch && git push --follow-tags`; `.github/workflows/release.yml` builds the Windows installer and publishes it.
+- The packaged app has `asar: false` so `servers/` stays plain files that `core/catalog.cjs` can copy to `~/.jmcp/servers`. Keep it that way.

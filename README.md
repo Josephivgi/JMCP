@@ -77,6 +77,31 @@ and installs package updates on SSH hosts. Agents get the same checks, an
 `show_user` to leave you a card on the Health page. See
 [servers/health](servers/health/README.md).
 
+## Install and update
+
+Download `JMCP-Setup-<version>.exe` from
+[GitHub Releases](https://github.com/Josephivgi/JMCP/releases) and run it.
+Windows may warn that the installer is from an unknown publisher, because it
+is not code signed yet; choose More info, then Run anyway.
+
+The installed app checks GitHub Releases when it starts and every six hours.
+When a new version is out, the bottom of the sidebar shows an **Update**
+button. Update downloads it, then **Restart to update** closes JMCP, installs
+the new version and opens it again. A downloaded update you did not restart
+for installs the next time JMCP quits. When JMCP runs from source
+(`npm start`), the sidebar says so and links to the releases instead.
+
+## Release a new version
+
+1. Commit your changes on `main`.
+2. `npm version patch` (or `minor`) sets the new version and makes a `v` tag.
+3. `git push --follow-tags`.
+
+The Release workflow builds the Windows installer on GitHub and publishes it
+with `latest.yml`, which is what the app's Update button reads. The tag must
+match the version in `package.json`. `npm run dist` builds the installer
+locally into `dist/` without publishing.
+
 ## Run
 
 ```

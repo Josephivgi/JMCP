@@ -19,6 +19,7 @@ const health = require("../core/health.cjs");
 const instructions = require("../core/instructions.cjs");
 const { activity } = require("../core/activity.cjs");
 const { probe } = require("../core/mcp-client.cjs");
+const { createUpdater, RELEASES_URL } = require("./updater.cjs");
 
 const argv = process.argv.slice(1);
 const flag = (name) => {
@@ -128,6 +129,29 @@ handle("pick-folder", async () => {
   const r = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), { properties: ["openDirectory"] });
   return r.canceled ? "" : r.filePaths[0] || "";
 });
+// Updates for JMCP itself, from GitHub Releases. Created when the app is
+// ready; the window gets each change as an "app-update" event.
+let appUpdater = null;
+const UPDATE_EVERY = 6 * 60 * 60 * 1000;
+function startUpdater() {
+  appUpdater = createUpdater({
+    updater: app.isPackaged ? require("electron-updater").autoUpdater : null,
+    packaged: app.isPackaged && !SMOKE,
+    version: app.getVersion(),
+    onChange: (s) => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send("app-update", s);
+    },
+  });
+  if (app.isPackaged && !SMOKE) {
+    setTimeout(() => appUpdater.check(), 8000);
+    setInterval(() => appUpdater.check(), UPDATE_EVERY).unref();
+  }
+}
+handle("app-update-state", () => appUpdater.state());
+handle("app-update-check", () => appUpdater.check());
+handle("app-update-download", () => appUpdater.download());
+handle("app-update-install", () => appUpdater.install());
+handle("app-releases", () => shell.openExternal(RELEASES_URL).then(() => true));
 handle("reveal", (file) => {
   const f = String(file || "");
   if (!f) return false;
@@ -223,6 +247,7 @@ app.whenReady().then(() => {
   } catch (e) {
     process.stderr.write("master instructions line: " + (e.message || e) + "\n");
   }
+  startUpdater();
   const win = createWindow();
   if (SMOKE) {
     win.webContents.on("console-message", (e) => {
