@@ -115,6 +115,9 @@ handle("health-note-remove", (id) => health.notes.remove(HOME, String(id)));
 handle("browser-list", () => browser.list(HOME));
 handle("browser-shot", (id) => browser.screenshot(HOME, String(id)));
 handle("browser-close", (id) => browser.close(HOME, String(id)));
+handle("browser-control", (id) => browser.takeControl(HOME, String(id)));
+handle("browser-hand-back", (id, note) => browser.handBack(HOME, String(id), typeof note === "string" ? note : ""));
+handle("browser-input", (id, ev) => browser.input(HOME, String(id), ev));
 handle("skills-import", (files) => {
   const offered = new Set(skills.importable(HOME).map((x) => x.file));
   return skills.importFiles(HOME, (Array.isArray(files) ? files : []).map(String).filter((f) => offered.has(f)));

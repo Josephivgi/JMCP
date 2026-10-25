@@ -607,3 +607,16 @@ pre.lib-body { margin: 0; font-size: 12.5px; }
 .br-recent-page { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .br-recent-row .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .br-recent-row .when { font-size: 12px; color: var(--faint); white-space: nowrap; }
+.br-card.asking { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
+.br-card.controlling { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+.br-live { position: relative; background: var(--well); border-bottom: 1px solid var(--line); cursor: default; outline: none; }
+.br-live img { display: block; width: 100%; height: auto; user-select: none; }
+.br-live.waiting { aspect-ratio: 16 / 10; }
+.br-live.waiting img { visibility: hidden; }
+.br-live.waiting .br-wait { display: grid; }
+.br-live:focus-visible, .br-live:focus { box-shadow: inset 0 0 0 3px var(--accent); }
+.br-control { margin-top: 4px; }
+.br-control .bad { color: var(--danger-text); }
+.br-control .lib-input { max-width: 560px; }
+.br-top { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.br-top .br-control { margin-top: 0; }

@@ -143,6 +143,7 @@ class Session {
       for (const t of list) s.known.add(t.id);
       if (!list.length) throw new Error("The browser opened with no page.");
       await s.attach(list[0]);
+      s.row = store.touch(undefined, s.row.id, { target_id: list[0].id });
     } catch (e) {
       await s.close("Could not start: " + e.message);
       throw e;
@@ -176,6 +177,8 @@ class Session {
     });
     await page.send("Page.enable");
     await page.send("Runtime.enable");
+    // The app's live view and control follow the page the agent is on.
+    if (this.row) this.row = store.touch(undefined, this.row.id, { target_id: target.id });
     const tree = await page.send("Page.getFrameTree");
     this.mainFrame = tree.frameTree.frame.id;
   }
@@ -241,6 +244,26 @@ class Session {
     if (!r.loaderId) this.loading = false;
     await this.settle(100);
     return this.after("Opened " + href);
+  }
+
+  // Ask the user to take over in the JMCP app and wait until they hand the
+  // browser back, it closes, or the time runs out.
+  async handoff(reason, timeoutSec) {
+    const asked = store.ask(undefined, this.row.id, reason);
+    const since = asked.ask_at;
+    const until = Date.now() + timeoutSec * 1000;
+    while (Date.now() < until) {
+      const row = store.byId(undefined, this.row.id);
+      if (!row || row.status !== "open") throw new Error("The browser was closed while waiting for the user" + (row && row.closed_reason ? ": " + row.closed_reason : "."));
+      if (!row.control && row.handed_back_at >= since) {
+        // The user may have opened a new tab or moved on; follow the page.
+        await this.settle(100);
+        const note = row.user_note ? "\nThe user says: " + row.user_note : "";
+        return (await this.after("The user handed the browser back")) + note + "\nRead the page with browser_snapshot before you go on.";
+      }
+      await cdp.sleep(1000);
+    }
+    return "The user has not handed the browser back after " + timeoutSec + " seconds. It is still waiting for them in the JMCP app. Call browser_handoff again to keep waiting, or tell the user what you need.";
   }
 
   async back() {

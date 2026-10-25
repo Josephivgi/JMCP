@@ -75,6 +75,16 @@ const TOOLS = [
     inputSchema: { type: "object", properties: { expression: str("JavaScript expression, e.g. document.querySelectorAll('li').length"), browser: BROWSER }, required: ["expression"], additionalProperties: false },
   },
   {
+    name: "browser_handoff",
+    description: "Hand the browser to the user when a person has to act: a CAPTCHA, a login, a 2FA code, a payment, or anything you cannot or should not do. The user gets a notice in the JMCP app, takes control of the live page there, and hands it back. This waits until they do (or until timeout_sec), then tells you where the page is.",
+    inputSchema: {
+      type: "object",
+      properties: { reason: str("What the user should do, e.g. Solve the CAPTCHA, then hand it back"), browser: BROWSER, timeout_sec: { type: "integer", description: "Most seconds to wait (default 600, at most 900)" } },
+      required: ["reason"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "browser_list",
     description: "List the browsers you have open and the page each is on.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -144,6 +154,15 @@ async function call(name, a) {
     return text("Closed " + s.name + ".");
   }
   const s = pick(a.browser);
+  if (name === "browser_handoff") {
+    if (!a.reason.trim()) throw new Error("reason must say what the user should do.");
+    return text(await s.handoff(a.reason.trim(), Math.max(10, Math.min(900, Number.isInteger(a.timeout_sec) ? a.timeout_sec : 600))));
+  }
+  // While the user drives the browser in the JMCP app, only reading is allowed.
+  const row = store.byId(undefined, s.row.id);
+  if (row && row.control === "user" && !["browser_snapshot", "browser_screenshot"].includes(name)) {
+    throw new Error("The user has taken control of " + s.name + " in the JMCP app. Call browser_handoff with what you are waiting for, to wait until they hand it back.");
+  }
   const target = () => {
     const given = ["ref", "selector", "text"].filter((k) => a[k] !== undefined && a[k] !== "");
     if (given.length !== 1) throw new Error("Give exactly one of ref, selector or text.");
@@ -172,7 +191,7 @@ const methods = {
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "jmcp-browser", title: "JMCP Browser", version: VERSION },
       instructions:
-        "A headless browser for web tasks: open a page with browser_open, read it with browser_snapshot, then click and type by the ref numbers it lists. Each browser starts with a fresh profile and no saved logins. The user can watch your browsers live on the JMCP Browsers page. Close a browser with browser_close when you are done.",
+        "A headless browser for web tasks: open a page with browser_open, read it with browser_snapshot, then click and type by the ref numbers it lists. Each browser starts with a fresh profile and no saved logins. The user can watch your browsers live on the JMCP Browsers page. If you hit a CAPTCHA, a login or anything a person must do, call browser_handoff: the user takes control in the JMCP app and hands it back. Close a browser with browser_close when you are done.",
     };
   },
   ping: () => ({}),

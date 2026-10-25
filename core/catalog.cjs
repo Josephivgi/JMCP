@@ -84,10 +84,11 @@ const CATALOG = [
     title: "Browser",
     official: true,
     description: "Gives every agent a hidden, headless browser (Chrome or Edge) to open pages, read them, click, type and take screenshots. Watch the browsers your agents have open on the Browsers page.",
-    tools: ["browser_open", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "browser_back", "browser_screenshot", "browser_eval", "browser_list", "browser_close"],
+    tools: ["browser_open", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "browser_back", "browser_screenshot", "browser_eval", "browser_handoff", "browser_list", "browser_close"],
     source: path.join(ROOT, "servers", "browser"),
     entry: "server.cjs",
-    toolTimeoutSec: 120,
+    // browser_handoff waits up to 15 minutes for the user.
+    toolTimeoutSec: 960,
   },
 ];
 

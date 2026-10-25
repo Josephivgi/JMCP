@@ -10,6 +10,19 @@ The open browsers are listed in `~/.jmcp/browser.db`. The JMCP app's
 which agent opened it, the folder it works in and its last action. You can
 close a browser from there; the agent is told on its next call.
 
+## Handing a browser to the user
+
+When a person has to act (a CAPTCHA, a login, a 2FA code), the agent calls
+`browser_handoff` with what you should do. The Browsers page highlights that
+browser, the sidebar count turns blue and Windows shows a notice. **Take
+control** turns its view into the live page: clicks, drags, typing, Ctrl+V and
+scrolling on the picture go to the browser. **Hand back to agent** (with an
+optional note) ends the wait and the agent carries on from the page you left.
+
+You can also take control of any browser without being asked. Until you hand
+it back, the agent can still read the page but its clicks, typing and
+navigation are refused with a note to call `browser_handoff` and wait.
+
 ## Tools
 
 | Tool | What it does |
@@ -23,6 +36,7 @@ close a browser from there; the agent is told on its next call.
 | `browser_back` | Go back one page |
 | `browser_screenshot` | PNG of the page (`full_page` for all of it) |
 | `browser_eval` | Run JavaScript in the page and get the result as JSON |
+| `browser_handoff` | Ask the user to take over (CAPTCHA, login) and wait until they hand it back. `timeout_sec` default 600, at most 900 |
 | `browser_list` | The browsers this session has open |
 | `browser_close` | Close a browser and delete its profile |
 

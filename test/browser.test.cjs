@@ -55,6 +55,26 @@ test("store adds, updates and closes browser rows", () => {
   assert.ok(fs.existsSync(path.join(home, ".jmcp", "browser.db")));
 });
 
+test("an older browsers table gets the hand-off columns", () => {
+  const home = scratch();
+  fs.mkdirSync(path.join(home, ".jmcp"));
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(path.join(home, ".jmcp", "browser.db"));
+  db.exec("CREATE TABLE browsers (id TEXT PRIMARY KEY, name TEXT NOT NULL, agent TEXT NOT NULL, cwd TEXT NOT NULL, server_pid INTEGER NOT NULL, browser_pid INTEGER, port INTEGER, browser_ws TEXT, program TEXT NOT NULL, profile TEXT NOT NULL, status TEXT NOT NULL, url TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', last_action TEXT NOT NULL DEFAULT '', closed_reason TEXT NOT NULL DEFAULT '', started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, closed_at INTEGER)");
+  db.close();
+  const row = store.add(home, { name: "browser-1", agent: "a", cwd: "", serverPid: process.pid, program: "chrome", profile: "p" });
+  assert.strictEqual(row.control, "");
+  assert.strictEqual(store.ask(home, row.id, "Log in").control, "asked");
+  assert.ok(store.takeControl(home, row.id));
+  assert.strictEqual(store.ask(home, row.id, "Still").control, "user");
+  assert.ok(store.handBack(home, row.id, "done"));
+  assert.ok(!store.handBack(home, row.id, "again"));
+  const back = store.byId(home, row.id);
+  assert.strictEqual(back.control, "");
+  assert.strictEqual(back.user_note, "done");
+  assert.ok(back.handed_back_at >= back.ask_at);
+});
+
 test("URLs are checked and completed", () => {
   assert.strictEqual(normalizeUrl("example.com"), "https://example.com/");
   assert.strictEqual(normalizeUrl("localhost:3000/a"), "http://localhost:3000/a");
@@ -103,7 +123,8 @@ test("a real agent session: open, read, click, type, new tab, screenshot, app vi
     assert.strictEqual(seen.open[0].agent, "browser-test");
     assert.strictEqual(seen.open[0].title, "Test home");
     const shot = await browsers.screenshot(home, seen.open[0].id);
-    assert.match(shot, /^data:image\/jpeg;base64,/);
+    assert.match(shot.src, /^data:image\/jpeg;base64,/);
+    assert.ok(shot.width > 300 && shot.height > 200, JSON.stringify([shot.width, shot.height]));
 
     r = await c.callTool("browser_snapshot", {}, 30000);
     assert.match(r.text, /Hello from the test page/);
@@ -143,6 +164,59 @@ test("a real agent session: open, read, click, type, new tab, screenshot, app vi
 
     r = await c.callTool("browser_navigate", { url: "file:///nope-" + Date.now() }, 30000);
     assert.ok(r.isError);
+
+    // The agent hands the browser to the user and waits.
+    await c.callTool("browser_navigate", { url: base + "/" }, 30000);
+    r = await c.callTool("browser_eval", { expression: "(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent === 'Press me').getBoundingClientRect(); const q = document.querySelector('input[name=q]').getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2, q.x + 5, q.y + q.height / 2]; })()" }, 30000);
+    const [bx, by, qx, qy] = JSON.parse(r.text);
+    const bid = (await browsers.list(home)).open[0].id;
+    await assert.rejects(() => browsers.input(home, bid, { type: "down", x: bx, y: by }), /Take control/);
+    r = await c.callTool("browser_handoff", { reason: " " }, 30000);
+    assert.match(r.text, /reason must say/);
+    const waiting = c.callTool("browser_handoff", { reason: "Solve the CAPTCHA", timeout_sec: 60 }, 90000);
+    let asked;
+    for (let i = 0; i < 50 && !(asked && asked.control === "asked"); i++) {
+      await new Promise((res) => setTimeout(res, 100));
+      asked = (await browsers.list(home)).open[0];
+    }
+    assert.strictEqual(asked.control, "asked");
+    assert.strictEqual(asked.askReason, "Solve the CAPTCHA");
+    assert.ok(browsers.takeControl(home, bid));
+    assert.strictEqual((await browsers.list(home)).open[0].control, "user");
+
+    // A second session of the same server cannot act while the user drives.
+    const c2 = connect(process.execPath, [SERVER], { env: { JMCP_HOME: path.join(home, ".jmcp") } });
+    await c2.initialize("other", 20000);
+    c2.close();
+
+    // The user clicks and types through the app.
+    await browsers.input(home, bid, { type: "down", x: bx, y: by });
+    await browsers.input(home, bid, { type: "up", x: bx, y: by });
+    await browsers.input(home, bid, { type: "down", x: qx, y: qy });
+    await browsers.input(home, bid, { type: "up", x: qx, y: qy });
+    await browsers.input(home, bid, { type: "text", text: "by hand" });
+    await browsers.input(home, bid, { type: "wheel", x: 10, y: 10, dy: 100 });
+    await assert.rejects(() => browsers.input(home, bid, { type: "key", key: "F13" }), /Unknown key/);
+    await assert.rejects(() => browsers.input(home, bid, { type: "down", x: "1", y: 2 }), /x must be a number/);
+    assert.ok(browsers.handBack(home, bid, "Solved it"));
+    r = await waiting;
+    assert.ok(!r.isError, r.text);
+    assert.match(r.text, /The user handed the browser back/);
+    assert.match(r.text, /The user says: Solved it/);
+    r = await c.callTool("browser_eval", { expression: "[document.body.dataset.clicked, document.querySelector('input[name=q]').value]" }, 30000);
+    assert.deepStrictEqual(JSON.parse(r.text), ["yes", "by hand"]);
+    await assert.rejects(() => browsers.input(home, bid, { type: "text", text: "x" }), /Take control/);
+
+    // While the user has control without being asked, actions wait for them.
+    browsers.takeControl(home, bid);
+    r = await c.callTool("browser_click", { text: "Press me" }, 30000);
+    assert.ok(r.isError);
+    assert.match(r.text, /taken control/);
+    r = await c.callTool("browser_snapshot", {}, 30000);
+    assert.ok(!r.isError);
+    r = await c.callTool("browser_handoff", { reason: "Finish up", timeout_sec: 10 }, 30000);
+    assert.match(r.text, /has not handed the browser back after 10 seconds/);
+    browsers.handBack(home, bid, "");
 
     // The user closes it from the app; the agent is told on its next call.
     const id = (await browsers.list(home)).open[0].id;

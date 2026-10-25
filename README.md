@@ -85,7 +85,9 @@ and installs package updates on SSH hosts. Agents get the same checks, an
 A hidden, headless browser (Chrome or Edge) for every agent: open a page, read
 it as numbered links, buttons and fields, click, type, press keys, run
 JavaScript and take screenshots. The Browsers page shows each open browser
-live, and its agent's name and folder. Browsers close when the agent's
+live, and its agent's name and folder. When an agent hits a CAPTCHA or a
+login it hands the browser to you: take control on the Browsers page, click
+and type in the live page, then hand it back. Browsers close when the agent's
 session ends. See [servers/browser](servers/browser/README.md).
 
 ## Install and update

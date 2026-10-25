@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld("jmcp", {
     list: () => call("browser-list"),
     shot: (id) => call("browser-shot", id),
     close: (id) => call("browser-close", id),
+    control: (id) => call("browser-control", id),
+    handBack: (id, note) => call("browser-hand-back", id, note),
+    input: (id, ev) => call("browser-input", id, ev),
   },
   reveal: (file) => call("reveal", file),
   appUpdate: {

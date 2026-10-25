@@ -68,7 +68,7 @@ function go(id) {
 
 function renderSide() {
   const pages = document.getElementById("nav-pages");
-  pages.replaceChildren(...PAGES.map((p) => h("button", { class: "nav-item" + (page === p.id ? " on" : ""), "aria-current": page === p.id ? "page" : null, "data-focus-key": "nav-" + p.id, onclick: () => go(p.id) }, icon(p.icon), h("span", { class: "grow", text: p.label }), p.id === "health" && typeof newNotes === "function" && newNotes() ? h("span", { class: "count new", title: newNotes() + " new from your agents", text: String(newNotes()) }) : null, p.id === "browsers" && typeof openBrowsers === "function" && openBrowsers() ? h("span", { class: "count", title: openBrowsers() + " open now", text: String(openBrowsers()) }) : null)));
+  pages.replaceChildren(...PAGES.map((p) => h("button", { class: "nav-item" + (page === p.id ? " on" : ""), "aria-current": page === p.id ? "page" : null, "data-focus-key": "nav-" + p.id, onclick: () => go(p.id) }, icon(p.icon), h("span", { class: "grow", text: p.label }), p.id === "health" && typeof newNotes === "function" && newNotes() ? h("span", { class: "count new", title: newNotes() + " new from your agents", text: String(newNotes()) }) : null, p.id === "browsers" && typeof openBrowsers === "function" && openBrowsers() ? h("span", { class: "count" + (browsersAsking() ? " new" : ""), title: browsersAsking() ? browsersAsking() + " need you" : openBrowsers() + " open now", text: String(openBrowsers()) }) : null)));
   const list = document.getElementById("nav-agents");
   list.replaceChildren(
     ...st.agents.map((a) =>
