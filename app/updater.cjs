@@ -10,7 +10,9 @@
 
 const RELEASES_URL = "https://github.com/Josephivgi/JMCP/releases";
 
-// status: source | idle | checking | current | available | downloading | ready | error
+const INSTALL_DELAY = 1500;
+
+// status: source | idle | checking | current | available | downloading | ready | installing | error
 function createUpdater({ updater, packaged, version, onChange }) {
   let state = { status: packaged ? "idle" : "source", version: String(version || ""), latest: "", percent: 0, error: "", checkedAt: 0 };
   const set = (patch) => {
@@ -35,7 +37,7 @@ function createUpdater({ updater, packaged, version, onChange }) {
   return {
     state: () => state,
     async check() {
-      if (!packaged || busy() || state.status === "ready") return state;
+      if (!packaged || busy() || state.status === "ready" || state.status === "installing") return state;
       set({ status: "checking", error: "" });
       try {
         const r = await updater.checkForUpdates();
@@ -62,10 +64,13 @@ function createUpdater({ updater, packaged, version, onChange }) {
       }
       return state;
     },
-    // Quit and run the new installer silently; it starts JMCP again after.
+    // Quit and run the new installer with its progress window showing, so the
+    // user sees the update happen; it starts JMCP again when it is done. The
+    // short wait lets the window show "Installing" before it closes.
     install() {
       if (state.status !== "ready") throw new Error("The update has not finished downloading.");
-      setImmediate(() => updater.quitAndInstall(true, true));
+      set({ status: "installing" });
+      setTimeout(() => updater.quitAndInstall(false, true), INSTALL_DELAY);
       return state;
     },
   };

@@ -111,6 +111,8 @@ function appUpdateView() {
   } else if (u.status === "ready") {
     kids.push(line("JMCP " + u.latest + " is ready. JMCP closes, updates and opens again."));
     kids.push(btn("Restart to update", () => appUpdateAct(api.appUpdate.install), true));
+  } else if (u.status === "installing") {
+    kids.push(line("Installing JMCP " + u.latest + ". JMCP closes now, a small window shows the install, then JMCP opens again by itself."));
   } else {
     if (u.status === "current") kids.push(line("Up to date."));
     if (u.status === "error") kids.push(line(u.error, "bad"));

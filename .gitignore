@@ -2,3 +2,4 @@ node_modules/
 *.jmcp-tmp
 jmcp-smoke.png
 dist/
+dist-test/

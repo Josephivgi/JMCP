@@ -57,9 +57,16 @@ test("a new release is offered, downloaded only on Update, then installed", asyn
   await up.download();
   assert.strictEqual(up.state().status, "ready");
   up.install();
-  await new Promise((r) => setImmediate(r));
-  assert.deepStrictEqual(updater.calls, ["check", "download", "install:true:true"]);
-  assert.deepStrictEqual(seen, ["checking", "checking", "available", "downloading", "downloading", "ready"]);
+  // The window shows "installing" before JMCP quits for the installer.
+  assert.strictEqual(up.state().status, "installing");
+  assert.deepStrictEqual(updater.calls, ["check", "download"]);
+  // A timed check in that gap does not undo it.
+  await up.check();
+  assert.strictEqual(up.state().status, "installing");
+  await new Promise((r) => setTimeout(r, 1700));
+  // Not silent, so the installer's progress window shows; JMCP runs again after.
+  assert.deepStrictEqual(updater.calls, ["check", "download", "install:false:true"]);
+  assert.deepStrictEqual(seen, ["checking", "checking", "available", "downloading", "downloading", "ready", "installing"]);
 });
 
 test("no new release says up to date and Update is refused", async () => {
