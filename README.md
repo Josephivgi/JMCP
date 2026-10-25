@@ -96,9 +96,12 @@ for installs the next time JMCP quits. When JMCP runs from source
 1. Commit your changes on `main`.
 2. `npm version patch` (or `minor`) sets the new version and makes a `v` tag.
 3. `git push --follow-tags`.
+4. When the Release workflow finishes, open the draft release on GitHub, write
+   the notes for people who use JMCP, and publish it.
 
-The Release workflow builds the Windows installer on GitHub and publishes it
-with `latest.yml`, which is what the app's Update button reads. The tag must
+The Release workflow builds the Windows installer on GitHub and uploads it to
+a draft release with `latest.yml`, which is what the app's Update button reads.
+Installed apps see the update once you publish the draft. The tag must
 match the version in `package.json`. `npm run dist` builds the installer
 locally into `dist/` without publishing.
 

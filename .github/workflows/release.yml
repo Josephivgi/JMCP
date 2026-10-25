@@ -44,7 +44,18 @@ jobs:
 
       - run: npm test
 
-      - name: Build and publish
+      # Make the draft release first. When electron-builder has to create it,
+      # its uploads race and can make two releases on the same tag.
+      - name: Create the draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "JMCP ${GITHUB_REF_NAME#v}" --notes ""
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Uploads the installer and latest.yml to the draft. The app sees the
+      # update once the draft gets its notes and is published.
+      - name: Build and upload
         if: startsWith(github.ref, 'refs/tags/')
         run: npx electron-builder --win --publish always
         env:

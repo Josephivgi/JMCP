@@ -57,5 +57,5 @@ JMCP is an Electron app plus a set of stdio MCP servers that it installs into ev
 
 ## Releases
 
-- The app updates itself from GitHub Releases (`app/updater.cjs`, electron-updater). Release with `npm version patch && git push --follow-tags`; `.github/workflows/release.yml` builds the Windows installer and publishes it.
+- The app updates itself from GitHub Releases (`app/updater.cjs`, electron-updater). Release with `npm version patch && git push --follow-tags`; `.github/workflows/release.yml` builds the Windows installer and uploads it to a draft release. Write the user-facing notes, show them to the user, then publish the draft (`gh release edit <tag> --notes-file <file> --draft=false`). Installed apps only see published releases.
 - The packaged app has `asar: false` so `servers/` stays plain files that `core/catalog.cjs` can copy to `~/.jmcp/servers`. Keep it that way.

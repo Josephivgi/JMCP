@@ -128,7 +128,7 @@ test("friendly keeps the first line of other errors", () => {
 
 test("the release config publishes to the public JMCP repo", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"));
-  assert.deepStrictEqual(pkg.build.publish[0], { provider: "github", owner: "Josephivgi", repo: "JMCP", releaseType: "release" });
+  assert.deepStrictEqual(pkg.build.publish[0], { provider: "github", owner: "Josephivgi", repo: "JMCP", releaseType: "draft" });
   // Servers are copied out of the app folder, so they must stay plain files.
   assert.strictEqual(pkg.build.asar, false);
   assert.ok(pkg.build.files.includes("servers/**"));
