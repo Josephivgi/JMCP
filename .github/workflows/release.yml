@@ -1,11 +1,13 @@
 # Builds the Windows installer and publishes it as a GitHub Release when a
 # version tag is pushed (npm version patch && git push --follow-tags).
 # The installed JMCP app checks these releases and offers an Update button.
+# Run it by hand (workflow_dispatch) to build and test without publishing.
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -25,6 +27,7 @@ jobs:
             servers/subagents/package-lock.json
 
       - name: Check the tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           v="$(node -p "require('./package.json').version")"
@@ -42,6 +45,20 @@ jobs:
       - run: npm test
 
       - name: Build and publish
+        if: startsWith(github.ref, 'refs/tags/')
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build only
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        run: npx electron-builder --win --publish never
+
+      - name: Keep the installer from a build-only run
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmcp-installer
+          path: |
+            dist/*.exe
+            dist/latest.yml
