@@ -11,7 +11,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-const SERVERS = ["rules", "instructions", "memory", "skills", "health", "subagents"];
+const SERVERS = ["rules", "instructions", "memory", "skills", "health", "browser", "subagents"];
 const dir = (s) => path.join(__dirname, "..", "servers", s);
 
 test("every server has the same lib/rpc.js", () => {

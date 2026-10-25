@@ -1,0 +1,12 @@
+{
+  "name": "jmcp-browser",
+  "version": "0.1.0",
+  "description": "MCP server that gives coding agents a headless browser. The JMCP app shows each agent's open browsers live.",
+  "license": "MIT",
+  "author": "Josephivgi",
+  "repository": { "type": "git", "url": "https://github.com/Josephivgi/JMCP.git", "directory": "servers/browser" },
+  "bin": { "jmcp-browser": "server.cjs" },
+  "main": "server.cjs",
+  "files": ["server.cjs", "lib/", "README.md"],
+  "engines": { "node": ">=22.13" }
+}

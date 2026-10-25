@@ -40,6 +40,7 @@ const PAGES = [
   { id: "memory", label: "Memory", icon: "M5 3h10v14l-5-4-5 4z" },
   { id: "skills", label: "Skills", icon: "M11 2 4 11h5l-1 7 7-9h-5z" },
   { id: "health", label: "Health", icon: "M10 17s-7-4.3-7-9a3.8 3.8 0 0 1 7-2 3.8 3.8 0 0 1 7 2c0 4.7-7 9-7 9z" },
+  { id: "browsers", label: "Browsers", icon: "M2 4h16v12H2zM2 7.5h16M5 5.8h.5M7.5 5.8h.5" },
   { id: "activity", label: "Activity", icon: "M2 10h4l2-5 4 10 2-5h4" },
 ];
 
@@ -67,7 +68,7 @@ function go(id) {
 
 function renderSide() {
   const pages = document.getElementById("nav-pages");
-  pages.replaceChildren(...PAGES.map((p) => h("button", { class: "nav-item" + (page === p.id ? " on" : ""), "aria-current": page === p.id ? "page" : null, "data-focus-key": "nav-" + p.id, onclick: () => go(p.id) }, icon(p.icon), h("span", { class: "grow", text: p.label }), p.id === "health" && typeof newNotes === "function" && newNotes() ? h("span", { class: "count new", title: newNotes() + " new from your agents", text: String(newNotes()) }) : null)));
+  pages.replaceChildren(...PAGES.map((p) => h("button", { class: "nav-item" + (page === p.id ? " on" : ""), "aria-current": page === p.id ? "page" : null, "data-focus-key": "nav-" + p.id, onclick: () => go(p.id) }, icon(p.icon), h("span", { class: "grow", text: p.label }), p.id === "health" && typeof newNotes === "function" && newNotes() ? h("span", { class: "count new", title: newNotes() + " new from your agents", text: String(newNotes()) }) : null, p.id === "browsers" && typeof openBrowsers === "function" && openBrowsers() ? h("span", { class: "count", title: openBrowsers() + " open now", text: String(openBrowsers()) }) : null)));
   const list = document.getElementById("nav-agents");
   list.replaceChildren(
     ...st.agents.map((a) =>
@@ -1149,7 +1150,7 @@ function render() {
   const end = focusKey && typeof active.selectionEnd === "number" ? active.selectionEnd : null;
   const scroll = $main.scrollTop;
   renderSide();
-  const view = page === "rules" ? rulesPage() : page === "instructions" ? instructionsPage() : page === "memory" ? memoryPage() : page === "skills" ? skillsPage() : page === "activity" ? activityPage() : page === "health" ? healthPage() : page.startsWith("agent:") ? agentPage(page.slice(6)) : catalogPage();
+  const view = page === "rules" ? rulesPage() : page === "instructions" ? instructionsPage() : page === "memory" ? memoryPage() : page === "skills" ? skillsPage() : page === "activity" ? activityPage() : page === "health" ? healthPage() : page === "browsers" ? browsersPage() : page.startsWith("agent:") ? agentPage(page.slice(6)) : catalogPage();
   $main.replaceChildren(view);
   if (focusKey) {
     const next = [...document.querySelectorAll("[data-focus-key]")].find((x) => x.dataset.focusKey === focusKey);

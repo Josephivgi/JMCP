@@ -12,6 +12,8 @@ CLI, Qwen Code and Grok.
 - **Agents**: one page per agent with the servers in its own config file,
   their command or URL, on or off, and a Check tools button that starts the
   server hidden and lists its tools.
+- **Browsers**: the headless browsers agents have open through jmcp-browser,
+  with a live view of each page and a Close button.
 - **Activity**: subagents run through jmcp-subagents.
 
 When JMCP starts it updates any JMCP server it installed whose copy in
@@ -77,6 +79,14 @@ and installs package updates on SSH hosts. Agents get the same checks, an
 `updates` tool to check and install updates on a host when you ask, and
 `show_user` to leave you a card on the Health page. See
 [servers/health](servers/health/README.md).
+
+## jmcp-browser
+
+A hidden, headless browser (Chrome or Edge) for every agent: open a page, read
+it as numbered links, buttons and fields, click, type, press keys, run
+JavaScript and take screenshots. The Browsers page shows each open browser
+live, and its agent's name and folder. Browsers close when the agent's
+session ends. See [servers/browser](servers/browser/README.md).
 
 ## Install and update
 

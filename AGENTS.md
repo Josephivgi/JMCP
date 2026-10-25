@@ -6,13 +6,13 @@ JMCP is an Electron app plus a set of stdio MCP servers that it installs into ev
 
 - `app/`: Electron app. `main.cjs` (IPC handlers), `preload.cjs`, `updater.cjs` (updates from GitHub Releases), `renderer/*.js` (pages; build DOM with the `h()` helper and text nodes, never `innerHTML` with data).
 - `core/`: shared logic. `catalog.cjs` lists JMCP servers and installs/updates them, `agents.cjs` edits each agent's MCP config (JSON/JSONC/TOML in place, `.jmcp-backup` on first change, never writes a TOML file that no longer parses).
-- `servers/<id>/`: one MCP server each (`subagents`, `rules`, `instructions`, `memory`, `skills`, `health`). Each has `server.cjs`, `lib/`, `package.json` (its version) and `README.md`.
+- `servers/<id>/`: one MCP server each (`subagents`, `rules`, `instructions`, `memory`, `skills`, `health`, `browser`). Each has `server.cjs`, `lib/`, `package.json` (its version) and `README.md`.
 - `cli/jmcp.cjs`: `node cli/jmcp.cjs list | catalog | install <server> [agents..] | update [server] | probe <agent> <server>`.
 - `test/*.test.cjs`: `node:test` suites.
 
 ## How the servers are built
 
-- Plain Node, no MCP SDK. JSON-RPC 2.0 over stdin/stdout, one message per line, through `servers/<id>/lib/rpc.js`. Every server has its own copy because each is installed on its own; keep the six copies identical (`test/rpc.test.cjs` checks this). Change one, then copy it to the others.
+- Plain Node, no MCP SDK. JSON-RPC 2.0 over stdin/stdout, one message per line, through `servers/<id>/lib/rpc.js`. Every server has its own copy because each is installed on its own; keep the seven copies identical (`test/rpc.test.cjs` checks this). Change one, then copy it to the others.
 - A server is a `methods` object passed to `serve(methods, onEnd)`. In `tools/call`: an unknown tool throws `rpcError(-32602, ...)`; arguments are checked with `checkArgs(tool.inputSchema, args)` before the tool runs; tool failures go back as `isError: true` results.
 - Data lives in SQLite under `~/.jmcp/*.db` (`node:sqlite`, WAL, busy_timeout). `JMCP_HOME` overrides the folder; tests always use a scratch home. Never use localStorage or JSON files as the source of truth.
 - A check-then-write (an upsert, a replace by name) runs inside one `BEGIN IMMEDIATE` transaction, because the app and several agents use the same database at once.

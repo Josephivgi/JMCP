@@ -18,6 +18,7 @@ const skills = require("../core/skills.cjs");
 const health = require("../core/health.cjs");
 const instructions = require("../core/instructions.cjs");
 const { activity } = require("../core/activity.cjs");
+const browser = require("../core/browser.cjs");
 const { probe } = require("../core/mcp-client.cjs");
 const { createUpdater, RELEASES_URL } = require("./updater.cjs");
 
@@ -110,6 +111,10 @@ handle("health-notes", (opts) => health.notes.list(HOME, { dismissed: Boolean(op
 handle("health-note-dismiss", (id, back) => health.notes.dismiss(HOME, String(id), back === true));
 handle("health-notes-dismiss-all", () => health.notes.dismissAll(HOME));
 handle("health-note-remove", (id) => health.notes.remove(HOME, String(id)));
+// Browsers page: what agents have open through jmcp-browser.
+handle("browser-list", () => browser.list(HOME));
+handle("browser-shot", (id) => browser.screenshot(HOME, String(id)));
+handle("browser-close", (id) => browser.close(HOME, String(id)));
 handle("skills-import", (files) => {
   const offered = new Set(skills.importable(HOME).map((x) => x.file));
   return skills.importFiles(HOME, (Array.isArray(files) ? files : []).map(String).filter((f) => offered.has(f)));

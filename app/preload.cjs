@@ -63,6 +63,11 @@ contextBridge.exposeInMainWorld("jmcp", {
     dismissAll: () => call("health-notes-dismiss-all"),
     remove: (id) => call("health-note-remove", id),
   },
+  browser: {
+    list: () => call("browser-list"),
+    shot: (id) => call("browser-shot", id),
+    close: (id) => call("browser-close", id),
+  },
   reveal: (file) => call("reveal", file),
   appUpdate: {
     state: () => call("app-update-state"),

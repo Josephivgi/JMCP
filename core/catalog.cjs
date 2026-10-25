@@ -78,6 +78,17 @@ const CATALOG = [
     entry: "server.cjs",
     toolTimeoutSec: 180,
   },
+  {
+    id: "browser",
+    name: "jmcp-browser",
+    title: "Browser",
+    official: true,
+    description: "Gives every agent a hidden, headless browser (Chrome or Edge) to open pages, read them, click, type and take screenshots. Watch the browsers your agents have open on the Browsers page.",
+    tools: ["browser_open", "browser_navigate", "browser_snapshot", "browser_click", "browser_type", "browser_press", "browser_back", "browser_screenshot", "browser_eval", "browser_list", "browser_close"],
+    source: path.join(ROOT, "servers", "browser"),
+    entry: "server.cjs",
+    toolTimeoutSec: 120,
+  },
 ];
 
 function jmcpHome(home) {
