@@ -18,7 +18,31 @@ test("lists its tools", async () => {
   const init = await c.initialize("test");
   assert.strictEqual(init.serverInfo.name, "jmcp-subagents");
   const { tools } = await c.request("tools/list");
-  assert.deepStrictEqual(tools.map((t) => t.name), ["providers", "spawn", "list", "wait", "send", "read", "stop"]);
+  assert.deepStrictEqual(tools.map((t) => t.name), ["providers", "models", "spawn", "list", "wait", "send", "read", "stop"]);
+  await c.close();
+});
+
+test("models answers from the kept lists without starting an agent", async () => {
+  const dir = home();
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(path.join(dir, "subagents.db"));
+  db.exec("CREATE TABLE models (provider TEXT PRIMARY KEY, models TEXT, current TEXT, efforts TEXT, error TEXT, checked_at INTEGER)");
+  const kept = [{ id: "opus", name: "Opus" }, { id: "sonnet", name: "Sonnet" }];
+  db.prepare("INSERT INTO models VALUES (?,?,?,?,?,?)").run("claude-code", JSON.stringify(kept), "opus", JSON.stringify(["low", "high"]), "", Date.now());
+  db.close();
+  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: dir, JMCP_SUBAGENT: "" } });
+  await c.initialize("test");
+  // Fresh lists are not read again, so nothing starts.
+  const r = JSON.parse((await c.callTool("models", { provider: "claude" })).text);
+  assert.strictEqual(r.providers.length, 1);
+  const p = r.providers[0];
+  assert.strictEqual(p.provider, "claude-code");
+  assert.deepStrictEqual(p.models, kept);
+  assert.strictEqual(p.current, "opus");
+  assert.deepStrictEqual(p.efforts, ["low", "high"]);
+  assert.strictEqual(p.refreshing, undefined);
+  assert.match((await c.callTool("models", { provider: "nope" })).text, /Unknown provider/);
+  assert.match((await c.callTool("models", { refresh: "yes" })).text, /Invalid arguments/);
   await c.close();
 });
 

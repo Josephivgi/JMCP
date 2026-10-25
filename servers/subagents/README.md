@@ -9,6 +9,7 @@ Devin, OpenCode can run Grok, and so on.
 | Tool | What it does |
 | --- | --- |
 | `providers` | Agents you can start and whether each is installed |
+| `models` | The models and effort levels each installed provider offers, read from the agent and kept for a day in `~/.jmcp/subagents.db` |
 | `spawn` | Start a subagent on a task; waits for its reply by default. With `wait: false` you can start several at once and `wait` on each |
 | `list` | Your subagents and their latest replies |
 | `wait` | Wait for a subagent to finish its turn |

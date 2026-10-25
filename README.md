@@ -25,7 +25,8 @@ The first time JMCP changes a file it saves a `.jmcp-backup` copy next to it.
 ## First server: jmcp-subagents
 
 Cross-provider subagents, ported from the JAgents Subagents plugin so it runs
-without the JAgents app. See [servers/subagents](servers/subagents/README.md).
+without the JAgents app. Its `models` tool lists the models and effort levels
+each installed agent offers. See [servers/subagents](servers/subagents/README.md).
 
 ## jmcp-rules
 

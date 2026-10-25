@@ -55,7 +55,8 @@ function openDb() {
   db.exec(
     "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;" +
       "CREATE TABLE IF NOT EXISTS subagents (session TEXT NOT NULL, handle TEXT NOT NULL, parent TEXT, provider TEXT, provider_name TEXT, task TEXT, cwd TEXT, status TEXT, error TEXT, model TEXT, effort TEXT, workflow TEXT, created_at INTEGER, updated_at INTEGER, transcript TEXT, PRIMARY KEY (session, handle));" +
-      "CREATE TABLE IF NOT EXISTS sessions (session TEXT PRIMARY KEY, parent TEXT, pid INTEGER, cwd TEXT, started_at INTEGER, ended_at INTEGER);",
+      "CREATE TABLE IF NOT EXISTS sessions (session TEXT PRIMARY KEY, parent TEXT, pid INTEGER, cwd TEXT, started_at INTEGER, ended_at INTEGER);" +
+      "CREATE TABLE IF NOT EXISTS models (provider TEXT PRIMARY KEY, models TEXT, current TEXT, efforts TEXT, error TEXT, checked_at INTEGER);",
   );
   q = {
     upsert: db.prepare(
@@ -66,6 +67,13 @@ function openDb() {
     session: db.prepare("INSERT INTO sessions (session, parent, pid, cwd, started_at) VALUES (?,?,?,?,?) ON CONFLICT(session) DO UPDATE SET parent=excluded.parent"),
     endSession: db.prepare("UPDATE sessions SET ended_at = ? WHERE session = ?"),
     endSubs: db.prepare("UPDATE subagents SET status = 'stopped' WHERE session = ? AND status IN ('busy','starting','ready','idle')"),
+    models: db.prepare("SELECT provider, models, current, efforts, error, checked_at FROM models"),
+    // An error keeps the last good list: a provider that fails once still
+    // shows what it offered before.
+    saveModels: db.prepare(
+      "INSERT INTO models (provider, models, current, efforts, error, checked_at) VALUES (?,?,?,?,?,?) " +
+        "ON CONFLICT(provider) DO UPDATE SET models=CASE WHEN excluded.error = '' THEN excluded.models ELSE models END, current=CASE WHEN excluded.error = '' THEN excluded.current ELSE current END, efforts=CASE WHEN excluded.error = '' THEN excluded.efforts ELSE efforts END, error=excluded.error, checked_at=excluded.checked_at",
+    ),
   };
 }
 
@@ -468,6 +476,126 @@ async function spawn(args) {
   return Object.assign(view(s, TEXT_MAX), why === "timeout" ? { hint: "Still working. Call wait with agent " + s.handle + "." } : {});
 }
 
+// ---- Model lists ----
+
+// Each provider's models, read from the agent itself: start it hidden with
+// no task, open a session, keep what it offers, end it. Kept in the models
+// table, so later calls (and the JMCP app) answer from there at once.
+const MODELS_STALE_MS = 24 * 60 * 60 * 1000;
+const PROBE_TIMEOUT_MS = 90 * 1000;
+const PROBES_AT_ONCE = 3;
+const probing = new Map();
+const probeQueue = [];
+const probeClients = new Set();
+let probesLive = 0;
+
+function withTimeout(p, ms, why) {
+  let t;
+  return Promise.race([p, new Promise((_, no) => (t = setTimeout(() => no(new Error(why)), ms)))]).finally(() => clearTimeout(t));
+}
+
+async function readModelsOf(providerId) {
+  const cwd = path.join(JMCP_HOME, "probe");
+  fs.mkdirSync(cwd, { recursive: true });
+  const client = openClient(providerId, cwd, null, "models");
+  probeClients.add(client);
+  try {
+    await client.initialize();
+    let created;
+    try {
+      created = await client.newSession({ cwd, mcpServers: [] });
+    } catch (e) {
+      const method = SILENT_AUTH[providerId];
+      if (!method || !/auth/i.test(errText(e))) throw e;
+      await client.authenticate(method);
+      created = await client.newSession({ cwd, mcpServers: [] });
+    }
+    if (!client.sessionId) client.sessionId = (created && (created.sessionId || created.session_id)) || "";
+    const m = client.models || {};
+    const st = typeof client.effortState === "function" ? client.effortState() : {};
+    return {
+      models: (m.availableModels || []).map((x) => ({ id: x.modelId, name: x.name || x.modelId, ...(x.description ? { description: String(x.description).slice(0, 300) } : {}) })),
+      current: m.currentModelId || "",
+      efforts: (st.levels || []).map((l) => l.value),
+    };
+  } finally {
+    probeClients.delete(client);
+    await endClient(client);
+  }
+}
+
+function probe(providerId) {
+  if (probing.has(providerId)) return probing.get(providerId);
+  const p = new Promise((done) => probeQueue.push({ providerId, done }));
+  probing.set(providerId, p);
+  pumpProbes();
+  return p;
+}
+
+function pumpProbes() {
+  while (probesLive < PROBES_AT_ONCE && probeQueue.length) {
+    const { providerId, done } = probeQueue.shift();
+    probesLive++;
+    withTimeout(readModelsOf(providerId), PROBE_TIMEOUT_MS, "The agent did not start in " + PROBE_TIMEOUT_MS / 1000 + " seconds.")
+      .then(
+        (r) => dbRun(() => q.saveModels.run(providerId, JSON.stringify(r.models), r.current, JSON.stringify(r.efforts), "", Date.now())),
+        (e) => dbRun(() => q.saveModels.run(providerId, "[]", "", "[]", errText(e).slice(0, 500), Date.now())),
+      )
+      .finally(() => {
+        probesLive--;
+        probing.delete(providerId);
+        done();
+        pumpProbes();
+      });
+  }
+}
+
+async function models(args) {
+  const agents = require("./lib/agents");
+  let list = agents.listAgents();
+  if (args.provider) {
+    const a = agents.agent(String(args.provider).trim().toLowerCase());
+    if (!a) throw new Error("Unknown provider " + args.provider + ". Call providers.");
+    list = list.filter((x) => x.id === a.id);
+  }
+  const saved = () => {
+    const rows = new Map();
+    dbRun(() => {
+      for (const r of q.models.all()) rows.set(r.provider, r);
+    });
+    return rows;
+  };
+  const now = Date.now();
+  const before = saved();
+  const wanted = list.filter((a) => a.installed && (args.refresh || !before.has(a.id) || now - (before.get(a.id).checked_at || 0) > MODELS_STALE_MS));
+  const runs = wanted.map((a) => probe(a.id));
+  if (args.wait && runs.length) await Promise.all(runs);
+  const rows = args.wait ? saved() : before;
+  const parse = (text, empty) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return empty;
+    }
+  };
+  return {
+    providers: list.map((a) => {
+      const r = rows.get(a.id);
+      return {
+        provider: a.id,
+        name: a.name,
+        installed: a.installed,
+        models: r ? parse(r.models, []) : [],
+        current: (r && r.current) || undefined,
+        efforts: r ? parse(r.efforts, []) : [],
+        checkedAt: (r && r.checked_at) || undefined,
+        error: (r && r.error) || undefined,
+        refreshing: probing.has(a.id) || undefined,
+      };
+    }),
+  };
+}
+
 // ---- Tools ----
 
 const PROVIDER_LIST = "claude, codex, droid, devin, cursor, opencode, gemini, qwen, grok, kilo, goose, cline, kimi";
@@ -478,6 +606,20 @@ const TOOLS = [
     description: "Agents you can start as subagents and whether each is installed on this computer. Short names: " + PROVIDER_LIST + ".",
     inputSchema: { type: "object", properties: {} },
     run: () => ({ you: parentName, providers: require("./lib/agents").listAgents().map((a) => ({ provider: a.id, shortNames: a.aliases.length ? a.aliases : undefined, name: a.name, installed: a.installed, install: a.install || undefined })) }),
+  },
+  {
+    name: "models",
+    description:
+      "The models and effort levels each installed provider offers, read from the agent itself and kept for a day. Answers at once from what is kept; a provider never read or read over a day ago is read again in the background (refreshing: true), so call again later. refresh: true reads them again; wait: true waits for that (up to 90 seconds per provider).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        provider: { type: "string", description: "One provider (id or short name); all when left out" },
+        refresh: { type: "boolean", description: "Read the lists again now" },
+        wait: { type: "boolean", description: "Wait for the lists being read" },
+      },
+    },
+    run: models,
   },
   {
     name: "spawn",
@@ -622,6 +764,7 @@ function shutdown() {
     if (["busy", "starting", "ready", "idle"].includes(s.status)) s.status = "stopped";
     save(s, true);
   }
+  for (const c of probeClients) endClient(c);
   dbRun(() => {
     q.endSubs.run(SESSION);
     q.endSession.run(Date.now(), SESSION);
