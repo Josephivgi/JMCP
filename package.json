@@ -43,7 +43,10 @@
       "servers/**",
       "package.json",
       "!**/test/**",
-      "!**/*.jmcp-tmp"
+      "!**/*.jmcp-tmp",
+      "!servers/subagents/node_modules/!(@anthropic-ai|ajv|ajv-formats|fast-deep-equal|fast-uri|json-schema-traverse|require-from-string)/**",
+      "!servers/subagents/node_modules/@anthropic-ai/!(claude-agent-sdk|claude-agent-sdk-win32-x64|claude-agent-sdk-win32-arm64)/**",
+      "!**/node_modules/**/*.{map,ts,mts,cts,md,markdown}"
     ],
     "win": {
       "target": "nsis",
