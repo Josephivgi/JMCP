@@ -7,7 +7,7 @@ from fontTools.pens.transformPen import TransformPen
 
 HERE = Path(__file__).parent
 SIZE = 1024
-BG = "#2a78d6"
+BG = "#1e3a8a"
 FONT = "C:/Windows/Fonts/segoeuib.ttf"
 TEXT = "JM"
 FONT_SIZE = int(SIZE * 0.51)
