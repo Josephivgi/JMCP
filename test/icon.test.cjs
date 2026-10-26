@@ -37,9 +37,9 @@ test("the Windows icon includes every supported size", () => {
   }
 });
 
-test("the sidebar uses outlined white JM lettering on the family blue", () => {
+test("the sidebar uses outlined white JM lettering on dark blue", () => {
   const svg = fs.readFileSync(path.join(assets, "icon.svg"), "utf8");
-  assert.match(svg, /fill="#2a78d6"/);
+  assert.match(svg, /fill="#1e3a8a"/);
   assert.match(svg, /rx="204"/);
   assert.match(svg, /fill="#ffffff"/);
   assert.equal((svg.match(/<path /g) || []).length, 2);
