@@ -121,6 +121,10 @@ test("MCP server lists its tools and rejects bad targets", async () => {
     const u = await c.request("tools/call", { name: "updates", arguments: { target: "not-a-configured-host", install: true } });
     assert.strictEqual(u.isError, true);
     assert.match(u.content[0].text, /Unknown host/);
+    // Results are compact JSON: indentation only costs the agent tokens.
+    const t = await c.callTool("targets", {});
+    assert.strictEqual(t.json.local.name, "local");
+    assert.ok(!t.text.includes("\n"), t.text);
   } finally {
     c.close();
   }

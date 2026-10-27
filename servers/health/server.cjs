@@ -80,8 +80,11 @@ let client = "";
 
 const INSTRUCTIONS = "Diagnoses this computer or SSH hosts. Use targets to see hosts, problems for everything found, slow_text for slow-loading text in the browser (pass url to test a page), glitchy for stutter and crashes, and updates to check pending package updates on a host (install: true installs them, only when the user asks). Explain the results to the user in plain words, worst first. Use show_user to leave the user a card on the JMCP Health page when you find something they should see later.";
 
-const text = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }], isError: false });
+// Compact JSON: indentation only costs the agent tokens.
+const text = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj) }], isError: false });
 const fail = (msg) => ({ content: [{ type: "text", text: msg }], isError: true });
+
+const serious = (problems) => problems.some((p) => p.severity === "high" || p.severity === "medium");
 
 function verdict(problems, okText) {
   const bad = problems.filter((p) => p.severity === "high" || p.severity === "medium");
@@ -110,7 +113,8 @@ async function callTool(name, args) {
       summary: summary(f),
       verdict: verdict(problems, "Nothing measured points at glitches right now. If it still happens, run this again while it is glitching; event-log checks cover the last 7 days."),
       causes: problems,
-      commonCauses: GLITCH_REASONS,
+      // The general list only helps when nothing specific was found.
+      commonCauses: serious(problems) ? undefined : GLITCH_REASONS,
     });
   }
   if (name === "slow_text") {
@@ -125,7 +129,7 @@ async function callTool(name, args) {
       if (page.error) out.pageError = page.error;
       else Object.assign(out, { page: page.page, html: page.html });
     }
-    out.commonCauses = TEXT_REASONS;
+    if (!serious(all)) out.commonCauses = TEXT_REASONS;
     return text(out);
   }
   if (name === "updates") {

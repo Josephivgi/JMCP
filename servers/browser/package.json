@@ -1,6 +1,6 @@
 {
   "name": "jmcp-browser",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server that gives coding agents a headless browser. The JMCP app shows each agent's open browsers live.",
   "license": "MIT",
   "author": "Josephivgi",

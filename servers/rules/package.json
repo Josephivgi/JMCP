@@ -1,6 +1,6 @@
 {
   "name": "jmcp-rules",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Read-only MCP server for rules set in the JMCP app.",
   "license": "MIT",
   "author": "Josephivgi",

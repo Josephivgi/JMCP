@@ -35,7 +35,7 @@ const TOOLS = [
   {
     name: "browser_snapshot",
     description: "Read the page: its title, URL, numbered list of links, buttons and fields (use the numbers as ref in browser_click and browser_type), and its visible text. Read again after the page changes; refs only hold until then.",
-    inputSchema: { type: "object", properties: { browser: BROWSER, max_text: { type: "integer", description: "Most characters of page text (default 8000)" } }, additionalProperties: false },
+    inputSchema: { type: "object", properties: { browser: BROWSER, max_text: { type: "integer", description: "Most characters of page text (default 8000)" }, max_elements: { type: "integer", description: "Most elements to list (default 150, at most 300)" } }, additionalProperties: false },
     annotations: { readOnlyHint: true },
   },
   {
@@ -169,7 +169,7 @@ async function call(name, a) {
     return { [given[0]]: a[given[0]] };
   };
   if (name === "browser_navigate") return text(await s.navigate(a.url));
-  if (name === "browser_snapshot") return text(await s.snapshot(a.max_text));
+  if (name === "browser_snapshot") return text(await s.snapshot(a.max_text, a.max_elements));
   if (name === "browser_click") return text(await s.click(target()));
   if (name === "browser_type") return text(await s.type(target(), a.value, { submit: a.submit === true, append: a.append === true }));
   if (name === "browser_press") return text(await s.press(a.key));

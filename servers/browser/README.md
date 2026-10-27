@@ -29,7 +29,7 @@ navigation are refused with a note to call `browser_handoff` and wait.
 | --- | --- |
 | `browser_open` | Start a browser, optionally at a URL. Up to 4 per agent session |
 | `browser_navigate` | Go to a URL and wait for it to load |
-| `browser_snapshot` | Title, URL, a numbered list of links, buttons and fields, and the page text |
+| `browser_snapshot` | Title, URL, a numbered list of links, buttons and fields (`max_elements`, default 150), and the page text (`max_text`, default 8000). Same-site links show only their path |
 | `browser_click` | Click by `ref` (from the snapshot), CSS `selector` or visible `text` |
 | `browser_type` | Click a field and type, replacing its text unless `append`; `submit` presses Enter |
 | `browser_press` | Press Enter, Tab, Escape, arrows and other keys |

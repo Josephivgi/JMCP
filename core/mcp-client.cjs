@@ -83,7 +83,15 @@ function connect(command, args, opts) {
     try {
       json = JSON.parse(text);
     } catch {
-      /* plain text */
+      // jmcp-subagents sends a reply as plain text after its JSON.
+      const at = text.indexOf("\n\nReply:\n");
+      if (at > 0) {
+        try {
+          json = Object.assign(JSON.parse(text.slice(0, at)), { reply: text.slice(at + 9) });
+        } catch {
+          /* plain text */
+        }
+      }
     }
     return { isError: Boolean(res && res.isError), text, json };
   }

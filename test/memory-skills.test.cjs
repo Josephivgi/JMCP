@@ -318,3 +318,19 @@ test("importing a skill named like another skill's id imports it", () => {
   const [r] = skills.importFiles(home, [src]);
   assert.strictEqual(r.ok, true, r.error);
 });
+
+test("the skill list every session loads cuts long descriptions shorter than skills_list", async () => {
+  const home = scratch();
+  skills.add(home, { name: "long", description: "Use when ".repeat(60) + "END", body: "Body." });
+  const c = connect(process.execPath, [SKILLS], { env: { JMCP_HOME: path.join(home, ".jmcp") } });
+  try {
+    const init = await c.initialize("test");
+    const line = init.instructions.split("Skills:")[1].trim();
+    assert.ok(line.length <= "- long: ".length + 200, String(line.length));
+    assert.ok(line.endsWith("..."));
+    const listed = (await c.callTool("skills_list")).text;
+    assert.ok(listed.length > line.length && listed.length <= "- long: ".length + 400);
+  } finally {
+    await c.close();
+  }
+});

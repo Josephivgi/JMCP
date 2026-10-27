@@ -277,9 +277,13 @@ function supportFiles(skill) {
 
 // The list agents get: one line per skill. max caps how many are shown, so
 // a large library cannot flood an agent's context.
-function index(skills, max) {
+function index(skills, max, descMax) {
+  const most = descMax || 400;
   const shown = skills.slice(0, max || 200);
-  const lines = shown.map((s) => "- " + s.name + ": " + s.description.replace(/\s+/g, " ").slice(0, 400));
+  const lines = shown.map((s) => {
+    const d = s.description.replace(/\s+/g, " ");
+    return "- " + s.name + ": " + (d.length > most ? d.slice(0, most - 3) + "..." : d);
+  });
   if (skills.length > shown.length) lines.push("- ... and " + (skills.length - shown.length) + " more. Call skills_list with query to search them all.");
   return lines.join("\n");
 }

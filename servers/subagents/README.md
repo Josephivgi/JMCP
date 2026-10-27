@@ -9,17 +9,21 @@ Devin, OpenCode can run Grok, and so on.
 | Tool | What it does |
 | --- | --- |
 | `providers` | Agents you can start and whether each is installed |
-| `models` | The models and effort levels each installed provider offers, read from the agent and kept for a day in `~/.jmcp/subagents.db` |
+| `models` | The models and effort levels each installed provider offers, read from the agent and kept for a day in `~/.jmcp/subagents.db`. Model descriptions only with `details: true` |
 | `spawn` | Start a subagent on a task; waits for its reply by default. With `wait: false` you can start several at once and `wait` on each |
-| `list` | Your subagents and their latest replies |
-| `wait` | Wait for a subagent to finish its turn |
+| `list` | Your subagents, the start of each task and of each latest reply |
+| `wait` | Wait for a subagent to finish its turn. The full reply comes once, when the turn ends; a wait that times out returns only a short progress line |
 | `send` | Send a follow-up message |
-| `read` | Read a subagent's transcript |
+| `read` | Read a subagent's transcript as plain lines, newest kept, up to `max_chars` (default 12000). Thinking is left out unless `thoughts: true` |
 | `stop` | Stop a turn, close a session, or remove a subagent |
 
 Providers: Claude Code (`claude`), Codex (`codex`), Factory Droid (`droid`),
 Devin, Cursor, OpenCode, Gemini CLI, Qwen Code, Grok,
 Kilo, goose, Cline, Kimi. Each must be installed and signed in on its own.
+
+Results are kept small, since they land in the calling agent's context:
+compact JSON, and a reply as plain text after it. A subagent's terminal
+output keeps the last 64 KB.
 
 ## How it works
 

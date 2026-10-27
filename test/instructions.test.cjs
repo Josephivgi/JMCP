@@ -427,3 +427,33 @@ test("JMCP agent guide: offered, added on top, kept current, taken out", () => {
   assert.strictEqual(fs.readFileSync(codex, "utf8"), ins.POINTER + "\r\n\r\n# Codex\r\nUse tabs.\r\n");
   assert.strictEqual(fs.readFileSync(claude, "utf8"), ins.POINTER + "\n\n# Claude\n");
 });
+
+test("long master instructions that have not changed come back as one line until full is asked", async () => {
+  const home = scratch();
+  const jmcp = path.join(home, ".jmcp");
+  const file = ins.masterPath(home);
+  ins.write(home, file, "Keep replies short. ".repeat(40) + "LAST", { by: "app", expectedHash: "" });
+  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp, USERPROFILE: home, HOME: home } });
+  try {
+    await c.initialize("test");
+    assert.match((await c.callTool("master_instructions", {})).text, /LAST/);
+    const again = (await c.callTool("master_instructions", {})).text;
+    assert.match(again, /have not changed since you last called/);
+    assert.doesNotMatch(again, /LAST/);
+    assert.match((await c.callTool("master_instructions", { full: true })).text, /LAST/);
+    ins.write(home, file, "Use tabs. ".repeat(60), { by: "app", expectedHash: ins.read(file, home).hash });
+    assert.match((await c.callTool("master_instructions", {})).text, /Use tabs/);
+  } finally {
+    await c.close();
+  }
+  // Short text is always sent whole.
+  ins.write(home, file, "Be brief.", { by: "app", expectedHash: ins.read(file, home).hash });
+  const d = connect(process.execPath, [SERVER], { env: { JMCP_HOME: jmcp, USERPROFILE: home, HOME: home } });
+  try {
+    await d.initialize("test");
+    await d.callTool("master_instructions", {});
+    assert.match((await d.callTool("master_instructions", {})).text, /Be brief/);
+  } finally {
+    await d.close();
+  }
+});

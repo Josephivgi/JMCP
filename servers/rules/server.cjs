@@ -11,8 +11,14 @@ const VERSION = require("./package.json").version;
 const TOOL = {
   name: "rules",
   description: "Call this read-only tool at the start of every task. Some agents ignore server instructions, and the user's JMCP rules may have changed since this session began.",
-  inputSchema: { type: "object", properties: {} },
+  inputSchema: { type: "object", properties: { full: { type: "boolean", description: "Return the rules even if they have not changed since your last call" } } },
 };
+
+// Agents call this at the start of every task. Long rules that have not
+// changed since the last call in this session come back as one line, not
+// the whole text again; full: true always returns them.
+const SHORT = 400;
+let lastSent = null;
 
 function rulesText() {
   return instructions(active());
@@ -33,7 +39,13 @@ const methods = {
   "tools/list": () => ({ tools: [TOOL] }),
   "tools/call"(params) {
     if (params.name !== "rules") throw rpcError(-32602, "Unknown tool " + params.name);
-    return { content: [{ type: "text", text: rulesText() }], isError: false };
+    const text = rulesText();
+    const full = Boolean(params.arguments && params.arguments.full === true);
+    if (!full && text.length > SHORT && text === lastSent) {
+      return { content: [{ type: "text", text: "The rules have not changed since you last called this tool in this session. Keep following them. If they are no longer in your context, call again with full: true." }], isError: false };
+    }
+    lastSent = text;
+    return { content: [{ type: "text", text }], isError: false };
   },
   "resources/list": () => ({ resources: [] }),
   "prompts/list": () => ({ prompts: [] }),

@@ -36,7 +36,8 @@ Tools:
 - `master_instructions`: the current master instructions, in full, with the
   same label. Agents are told to call it at the start of every task, since
   some agents ignore server instructions and the text may have changed since
-  the session started.
+  the session started. Long text that has not changed since the last call
+  in the session comes back as one line; `full: true` always returns it.
 - `list`: each agent's global file (for example `~/.codex/AGENTS.md` and
   `~/.claude/CLAUDE.md`), made or not, Claude Code's rule files in
   `~/.claude/rules`, every project folder saved in JMCP, and project folders

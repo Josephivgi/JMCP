@@ -40,7 +40,8 @@ const SNAPSHOT = `(() => {
     if (tag === "select" && el.selectedOptions && el.selectedOptions[0]) extra += ' selected="' + clean(el.selectedOptions[0].text, 60) + '"';
     if ((type === "checkbox" || type === "radio") && el.checked) extra += " checked";
     if (el.getAttribute("aria-checked") === "true" || el.getAttribute("aria-selected") === "true") extra += " selected";
-    if (tag === "a" && el.href) extra += " -> " + el.href.slice(0, 160);
+    // Same-site links show only their path; the origin is in the Page line.
+    if (tag === "a" && el.href) extra += " -> " + (el.href.startsWith(location.origin + "/") ? el.href.slice(location.origin.length) : el.href).slice(0, 120);
     if (el.disabled) extra += " disabled";
     out.push("[" + n + "] " + role + (label ? ' "' + label + '"' : "") + extra);
   }
@@ -275,8 +276,9 @@ class Session {
     return this.after("Went back");
   }
 
-  async snapshot(maxText) {
-    const s = await this.eval(SNAPSHOT);
+  async snapshot(maxText, maxElements) {
+    const most = Math.max(1, Math.min(300, Number.isInteger(maxElements) ? maxElements : 150));
+    const s = await this.eval(SNAPSHOT.replace("const MAX = 300;", "const MAX = " + most + ";"));
     await this.where("Read the page");
     const limit = Math.max(0, Math.min(100000, Number.isFinite(maxText) ? maxText : 8000));
     const text = s.text.length > limit ? s.text.slice(0, limit) + "\n(The text goes on: " + (s.text.length - limit) + " more characters. Pass a larger max_text to read more.)" : s.text;
@@ -285,7 +287,7 @@ class Session {
       "",
       "Elements (click or type by ref number):",
       s.elements.length ? s.elements.join("\n") : "(none visible)",
-      s.skipped ? "(" + s.skipped + " more elements were not listed.)" : "",
+      s.skipped ? "(" + s.skipped + " more elements were not listed. Pass a larger max_elements, at most 300, to list them.)" : "",
       "",
       "Text:",
       text || "(no text)",
@@ -349,7 +351,7 @@ class Session {
     const v = await this.eval(expression);
     await this.settle(100);
     await this.where("Ran a script");
-    const s = v === undefined ? "undefined" : JSON.stringify(v, null, 1);
+    const s = v === undefined ? "undefined" : JSON.stringify(v);
     return s.length > 20000 ? s.slice(0, 20000) + "\n(cut at 20000 characters)" : s;
   }
 

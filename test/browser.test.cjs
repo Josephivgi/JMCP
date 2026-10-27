@@ -128,7 +128,13 @@ test("a real agent session: open, read, click, type, new tab, screenshot, app vi
 
     r = await c.callTool("browser_snapshot", {}, 30000);
     assert.match(r.text, /Hello from the test page/);
-    const ref = (label) => Number(new RegExp("\\[(\\d+)\\] [a-z]+ \"" + label).exec(r.text)[1]);
+    // Same-site links show only their path.
+    assert.match(r.text, /link "Go to page two" -> \/two\n/);
+    const one = await c.callTool("browser_snapshot", { max_elements: 1 }, 30000);
+    assert.strictEqual(one.text.split("\n").filter((l) => /^\[\d+\] /.test(l)).length, 1);
+    assert.match(one.text, /more elements were not listed. Pass a larger max_elements/);
+    r = await c.callTool("browser_snapshot", {}, 30000);
+    const ref =(label) => Number(new RegExp("\\[(\\d+)\\] [a-z]+ \"" + label).exec(r.text)[1]);
 
     r = await c.callTool("browser_click", { ref: ref("Press me") }, 30000);
     assert.ok(!r.isError, r.text);
