@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld("jmcp", {
     trashText: (id) => call("instructions-trash-text", id),
     restore: (id) => call("instructions-restore", id),
     forget: (id) => call("instructions-forget", id),
+    guide: () => call("instructions-guide"),
+    setGuide: (on) => call("instructions-set-guide", on),
   },
   pickFolder: () => call("pick-folder"),
   memory: {

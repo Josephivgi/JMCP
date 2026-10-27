@@ -34,7 +34,8 @@ function withDb(home, fn) {
       "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;" +
         "CREATE TABLE IF NOT EXISTS folders (path TEXT PRIMARY KEY, added_at INTEGER NOT NULL);" +
         "CREATE TABLE IF NOT EXISTS hidden_folders (path TEXT PRIMARY KEY, hidden_at INTEGER NOT NULL);" +
-        "CREATE TABLE IF NOT EXISTS trash (id TEXT PRIMARY KEY, path TEXT NOT NULL, reason TEXT NOT NULL CHECK (reason IN ('deleted', 'replaced')), by TEXT NOT NULL, size INTEGER NOT NULL, at INTEGER NOT NULL);",
+        "CREATE TABLE IF NOT EXISTS trash (id TEXT PRIMARY KEY, path TEXT NOT NULL, reason TEXT NOT NULL CHECK (reason IN ('deleted', 'replaced')), by TEXT NOT NULL, size INTEGER NOT NULL, at INTEGER NOT NULL);" +
+        "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     );
     return fn(db);
   } finally {
@@ -47,14 +48,14 @@ function agentFiles(home) {
   const h = userHome(home);
   const xdg = !home && process.env.XDG_CONFIG_HOME ? process.env.XDG_CONFIG_HOME : path.join(h, ".config");
   return [
-    { agent: "Claude Code", file: path.join(h, ".claude", "CLAUDE.md") },
-    { agent: "Codex", file: path.join(h, ".codex", "AGENTS.md") },
-    { agent: "Factory Droid", file: path.join(h, ".factory", "AGENTS.md") },
-    { agent: "OpenCode", file: path.join(xdg, "opencode", "AGENTS.md") },
-    { agent: "Cursor", file: path.join(h, ".cursor", "AGENTS.md") },
-    { agent: "Gemini CLI", file: path.join(h, ".gemini", "GEMINI.md") },
-    { agent: "Qwen Code", file: path.join(h, ".qwen", "QWEN.md") },
-    { agent: "Grok", file: path.join(h, ".grok", "AGENTS.md") },
+    { id: "claude-code", agent: "Claude Code", file: path.join(h, ".claude", "CLAUDE.md") },
+    { id: "codex", agent: "Codex", file: path.join(h, ".codex", "AGENTS.md") },
+    { id: "factory-droid", agent: "Factory Droid", file: path.join(h, ".factory", "AGENTS.md") },
+    { id: "opencode", agent: "OpenCode", file: path.join(xdg, "opencode", "AGENTS.md") },
+    { id: "cursor", agent: "Cursor", file: path.join(h, ".cursor", "AGENTS.md") },
+    { id: "gemini", agent: "Gemini CLI", file: path.join(h, ".gemini", "GEMINI.md") },
+    { id: "qwen", agent: "Qwen Code", file: path.join(h, ".qwen", "QWEN.md") },
+    { id: "grok", agent: "Grok", file: path.join(h, ".grok", "AGENTS.md") },
   ];
 }
 
@@ -493,13 +494,16 @@ function pointerFile(home, file, want) {
     if (s && s.size > MAX_BYTES) return undefined;
     return s ? fs.readFileSync(file, "utf8") : null;
   };
-  const done = (before) => before === undefined || (before === null ? !want : pointerOk(before, want));
+  // The JMCP agent guide already tells the agent to call master_instructions.
+  const wantIn = (text) => want && !(text && text.includes(GUIDE_MARK));
+  const done = (before) => before === undefined || (before === null ? !want : pointerOk(before, wantIn(before)));
   // Most session starts change nothing; check before taking the lock.
   if (done(current())) return false;
   checkLink(file, home);
   return locked(home, (db) => {
     const before = current();
     if (done(before)) return false;
+    want = wantIn(before);
     const eol = before && before.includes("\r\n") ? "\r\n" : "\n";
     const rest = before === null ? "" : withoutPointer(before);
     if (before !== null) keep(home, db, file, "replaced", "jmcp");
@@ -529,6 +533,124 @@ function syncPointers(home, opts) {
       out.errors.push({ path: a.file, error: String(e.message || e) });
     }
   }
+  return out;
+}
+
+// The JMCP agent guide: a section the user can turn on in the app. Agents
+// do not always look at their MCP servers by themselves, so the section at
+// the top of each agent's global file says which JMCP servers to use, and
+// what to do when they are not connected in the session. JMCP rewrites it
+// when it changes and takes it out when it is turned off. While it is there,
+// it stands in for the master instructions line.
+const GUIDE_MARK = "<!-- JMCP agent guide";
+const GUIDE_END = "<!-- end of JMCP agent guide -->";
+const GUIDE_SERVERS = ["instructions", "rules", "skills", "memory"];
+
+function guideOn(home) {
+  return withDb(home, (db) => {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'guide'").get();
+    return Boolean(row && row.value === "on");
+  });
+}
+
+function setGuideOn(home, on) {
+  withDb(home, (db) => db.prepare("INSERT INTO settings (key, value) VALUES ('guide', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(on ? "on" : "off"));
+}
+
+// The section for one agent. connect.cli is the JMCP command line, given
+// when Node is on the PATH so the agent can run it.
+function guideText(a, connect) {
+  const lines = [
+    GUIDE_MARK + ": JMCP keeps this section up to date. Turn it off on the Instructions page of the JMCP app. -->",
+    "## JMCP",
+    "",
+    "The user runs JMCP, which gives you these MCP servers. Use them:",
+    "",
+    "- jmcp-instructions: before your first reply in every session, and at the start of each new task, call its master_instructions tool and follow what it returns. Finding or loading the tool is not enough; call it before you answer, even for a short question.",
+    "- jmcp-rules: the user's rules. Follow them in everything you do.",
+    "- jmcp-skills: the user's skills. When a task matches a skill's description, load it with skill_read and follow it.",
+    "- jmcp-memory: memory shared by all of the user's agents. Search it before work that may depend on the user's preferences or past decisions, and save what a future session should know.",
+    "- jmcp-subagents, jmcp-health and jmcp-browser, when installed: other coding agents as subagents, health checks of this computer, and a hidden browser.",
+    "",
+    "Some agents load MCP servers a few seconds after the session starts, so look for the jmcp- tools again before deciding they are missing. If they are still missing, JMCP is not connected in this session. Say so at the start of your reply and offer to connect it." +
+      (connect && connect.cli ? " With the user's OK, run:" : " The user connects it in the JMCP app: open JMCP servers and install jmcp-instructions, jmcp-rules, jmcp-skills and jmcp-memory for " + a.agent + "."),
+  ];
+  if (connect && connect.cli) {
+    lines.push("", "```");
+    for (const s of GUIDE_SERVERS) lines.push('node "' + connect.cli + '" install ' + s + " " + a.id);
+    lines.push("```", "", "The user can also do it in the JMCP app, on the JMCP servers page.");
+  }
+  lines.push("New servers load when a session starts, so ask the user to start a new session afterwards.", GUIDE_END);
+  return lines.join("\n");
+}
+
+// The file without the section, and the blank line JMCP put after it.
+function withoutGuide(text) {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => l.includes(GUIDE_MARK));
+  if (start < 0) return text;
+  let end = lines.findIndex((l, i) => i > start && l.includes(GUIDE_END));
+  // Someone took out the end marker: only the first line is surely JMCP's.
+  if (end < 0) end = start;
+  if (lines[end + 1] !== undefined && !lines[end + 1].trim()) end++;
+  lines.splice(start, end - start + 1);
+  return lines.join("\n");
+}
+
+function guideOk(text, block) {
+  const lf = text.replace(/\r\n/g, "\n");
+  if (!block) return !lf.includes(GUIDE_MARK);
+  return lf.split(GUIDE_MARK).length === 2 && lf.includes(block);
+}
+
+// Put the section in one file (block) or take it out (null). Like the master
+// instructions line: in place, the old version in the trash first.
+function guideFile(home, file, block) {
+  const current = () => {
+    const s = stat(file);
+    if (s && s.size > MAX_BYTES) return undefined;
+    return s ? fs.readFileSync(file, "utf8") : null;
+  };
+  const done = (before) => before === undefined || (before === null ? !block : guideOk(before, block));
+  if (done(current())) return false;
+  checkLink(file, home);
+  return locked(home, (db) => {
+    const before = current();
+    if (done(before)) return false;
+    const eol = before && before.includes("\r\n") ? "\r\n" : "\n";
+    let rest = before === null ? "" : withoutGuide(before.replace(/\r\n/g, "\n"));
+    // The section replaces the master instructions line.
+    if (block) rest = withoutPointer(rest);
+    if (before !== null) keep(home, db, file, "replaced", "jmcp");
+    if (!block && !rest.trim()) {
+      fs.rmSync(file);
+      return true;
+    }
+    const text = block ? block + "\n" + (rest.trim() ? "\n" + rest : "") : rest;
+    fs.writeFileSync(file, eol === "\r\n" ? text.replace(/\n/g, "\r\n") : text);
+    return true;
+  });
+}
+
+// Bring every agent's global file in line with the guide setting, then the
+// master instructions line, which comes back where the section went away.
+// on (true or false) also saves the setting.
+function syncGuide(home, opts) {
+  opts = opts || {};
+  if (typeof opts.on === "boolean") setGuideOn(home, opts.on);
+  const on = guideOn(home);
+  const out = { on, changed: [], errors: [] };
+  for (const a of agentFiles(home)) {
+    if (!fs.existsSync(path.dirname(a.file))) continue;
+    try {
+      if (guideFile(home, a.file, on ? guideText(a, opts.connect) : null)) out.changed.push(a.file);
+    } catch (e) {
+      out.errors.push({ path: a.file, error: String(e.message || e) });
+    }
+  }
+  const p = syncPointers(home);
+  for (const f of p.changed) if (!out.changed.includes(f)) out.changed.push(f);
+  out.errors.push(...p.errors);
   return out;
 }
 
@@ -564,4 +686,4 @@ function forget(home, id) {
   });
 }
 
-module.exports = { NAMES, POINTER, masterPath, master, syncPointers, agentFiles, rulesDir, rulesFiles, checkPath, folders, addFolder, removeFolder, detectFolders, hiddenFolders, list, read, write, remove, trash, trashText, restore, forget, hash };
+module.exports = { NAMES, POINTER, masterPath, master, syncPointers, guideOn, guideText, syncGuide, agentFiles, rulesDir, rulesFiles, checkPath, folders, addFolder, removeFolder, detectFolders, hiddenFolders, list, read, write, remove, trash, trashText, restore, forget, hash };

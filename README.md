@@ -54,6 +54,12 @@ agent's global instruction file starts with a line telling the agent to call
 `master_instructions` first, for agents that ignore server instructions. JMCP
 keeps that line there and removes it when you delete the master instructions.
 
+**Help agents find JMCP**, also on the Instructions page, offers to add a short
+JMCP section to each agent's own file (CLAUDE.md, AGENTS.md, GEMINI.md,
+QWEN.md). It tells the agent to read your master instructions, follow your
+rules, use your skills and memory, and offer to connect JMCP when its servers
+are not connected in that session. You can take it out again at any time.
+
 ## jmcp-memory
 
 Memory shared by every agent. What one agent saves (a preference, a decision,

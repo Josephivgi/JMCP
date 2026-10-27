@@ -645,6 +645,8 @@ let insLoading = null;
 let insError = "";
 let insTrash = [];
 let insLog = null; // {ok, text}
+let guide = null; // {on, text}: the JMCP agent guide
+let guideShown = false;
 let sel = null; // {path, label, exists, text, hash, draft, loading, error}
 let insAsk = null; // {kind: "delete"} | {kind: "open", file} | {kind: "folder", path} | {kind: "forget", id}
 let folderDraft = "";
@@ -666,7 +668,8 @@ function sep(p) {
 }
 
 async function fetchIns() {
-  const [list, trash] = await Promise.allSettled([api.instructions.list(), api.instructions.trash()]);
+  const [list, trash, g] = await Promise.allSettled([api.instructions.list(), api.instructions.trash(), api.instructions.guide()]);
+  if (g.status === "fulfilled") guide = g.value;
   if (list.status === "fulfilled") {
     ins = list.value;
     insError = "";
@@ -996,6 +999,38 @@ function trashPanel() {
   );
 }
 
+// The JMCP agent guide: an offer to put a JMCP section in every agent's own
+// file, so agents use JMCP without being asked and offer to connect it.
+function setGuide(on) {
+  insWork(() => api.instructions.setGuide(on), (r) => {
+    const n = r.changed.length;
+    let text = (on ? "Added the JMCP section" : "Took out the JMCP section") + (n ? " in " + n + " agent file" + (n === 1 ? "" : "s") + "." : ". No agent file needed a change.");
+    for (const e of r.errors) text += " Could not update " + e.path + ": " + e.error;
+    insLog = { ok: !r.errors.length, text };
+    if (sel && !dirty() && r.changed.some((f) => f.toLowerCase() === sel.path.toLowerCase())) openFile({ path: sel.path, label: sel.label, exists: true });
+  });
+}
+
+function guidePanel() {
+  return h("section", { class: "panel ins-guide" },
+    h("div", { class: "ins-editor-head" },
+      h("div", { class: "grow" },
+        h("h2", { text: guide.on ? "JMCP section in agent files: on" : "Help agents find JMCP" }),
+        h("p", { class: "ins-guide-text", text: guide.on
+          ? "Each agent's own file (CLAUDE.md, AGENTS.md, GEMINI.md, QWEN.md) starts with a short JMCP section. JMCP keeps it up to date, and the old file is kept in Deleted and replaced."
+          : "Some agents only use JMCP when their instruction file tells them to. Add a short JMCP section to each agent's own file (CLAUDE.md, AGENTS.md, GEMINI.md, QWEN.md). It tells the agent to read your master instructions, follow your rules, use your skills and memory, and offer to connect JMCP when it is not connected." }),
+      ),
+      h("div", { class: "row-actions" },
+        h("button", { class: "btn small quiet", "aria-expanded": guideShown ? "true" : "false", onclick: () => { guideShown = !guideShown; render(); } }, guideShown ? "Hide the text" : "Show the text"),
+        guide.on
+          ? h("button", { class: "btn small", disabled: busy, onclick: () => setGuide(false) }, "Take it out")
+          : h("button", { class: "btn small primary", disabled: busy, onclick: () => setGuide(true) }, "Add to agent files"),
+      ),
+    ),
+    guideShown ? h("pre", { class: "rule-preview", text: guide.text }) : null,
+  );
+}
+
 function instructionsPage() {
   if ((!ins || insStale) && !insLoading && !busy) {
     insStale = false;
@@ -1006,6 +1041,7 @@ function instructionsPage() {
       h("button", { class: "btn", disabled: busy, onclick: () => { detected = null; insWork(async () => {}); } }, "Refresh"),
     ]),
     serverStrip("instructions", "With it, every agent gets your master instructions, and you can ask any agent to read, edit, create or delete these files."),
+    guide ? guidePanel() : null,
     insError ? h("div", { class: "error-box", role: "alert", text: insError }) : null,
     insLog ? h("div", { class: insLog.ok ? "ok-box" : "error-box", role: "status" }, h("span", { text: insLog.text }), h("button", { class: "btn small quiet", "aria-label": "Dismiss", onclick: () => { insLog = null; render(); } }, "Dismiss")) : null,
     !ins ? h("div", { class: "panel empty", text: "Loading files…" }) : h("div", { class: "ins-grid" }, filesPanel(), editorPanel()),

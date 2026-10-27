@@ -375,3 +375,55 @@ test("master instructions line: added to agent files, kept there, removed with t
   assert.deepStrictEqual(ins.syncPointers(home, { addOnly: true }), { changed: [], errors: [] });
   assert.strictEqual(fs.readFileSync(claude, "utf8"), ins.POINTER + "\n");
 });
+
+test("JMCP agent guide: offered, added on top, kept current, taken out", () => {
+  const home = scratch();
+  const codex = path.join(home, ".codex", "AGENTS.md");
+  const claude = path.join(home, ".claude", "CLAUDE.md");
+  fs.mkdirSync(path.dirname(codex), { recursive: true });
+  fs.mkdirSync(path.dirname(claude), { recursive: true });
+  fs.writeFileSync(codex, "# Codex\r\nUse tabs.\r\n");
+  ins.write(home, ins.masterPath(home), "Call me Captain.\n", { by: "app", expectedHash: "" });
+  assert.ok(fs.readFileSync(claude, "utf8").startsWith(ins.POINTER));
+
+  // Off until the user turns it on; a sync then changes nothing.
+  assert.strictEqual(ins.guideOn(home), false);
+  assert.deepStrictEqual(ins.syncGuide(home), { on: false, changed: [], errors: [] });
+
+  const connect = { cli: "C:\\Program Files\\JMCP\\cli\\jmcp.cjs" };
+  const r = ins.syncGuide(home, { on: true, connect });
+  assert.strictEqual(r.on, true);
+  assert.deepStrictEqual(r.errors, []);
+  assert.deepStrictEqual(r.changed.sort(), [claude, codex].sort());
+  assert.strictEqual(ins.guideOn(home), true);
+  // The section replaces the master instructions line and keeps the file's text and line endings.
+  const codexText = fs.readFileSync(codex, "utf8");
+  assert.ok(codexText.startsWith("<!-- JMCP agent guide"));
+  assert.ok(codexText.endsWith("<!-- end of JMCP agent guide -->\r\n\r\n# Codex\r\nUse tabs.\r\n"));
+  assert.ok(!codexText.replace(/\r\n/g, "").includes("\n"), "CRLF throughout");
+  assert.ok(!codexText.includes(ins.POINTER));
+  // It names the agent's own id in the connect commands.
+  assert.match(codexText, /node "C:\\Program Files\\JMCP\\cli\\jmcp\.cjs" install instructions codex/);
+  assert.match(fs.readFileSync(claude, "utf8"), /install memory claude-code/);
+  assert.match(fs.readFileSync(claude, "utf8"), /call its master_instructions tool/);
+  // Nothing to do the second time, and the session-start line sync leaves it alone.
+  assert.deepStrictEqual(ins.syncGuide(home, { connect }).changed, []);
+  assert.deepStrictEqual(ins.syncPointers(home, { addOnly: true }).changed, []);
+
+  // Without Node on the PATH it points to the app instead, and the section is rewritten.
+  assert.deepStrictEqual(ins.syncGuide(home).changed.sort(), [claude, codex].sort());
+  assert.match(fs.readFileSync(claude, "utf8"), /open JMCP servers and install jmcp-instructions/);
+  assert.strictEqual(fs.readFileSync(claude, "utf8").split("<!-- JMCP agent guide").length, 2);
+
+  // An agent rewrites its file without it; the next sync puts it back.
+  ins.write(home, claude, "# Claude\n", { by: "agent", expectedHash: ins.read(claude, home).hash });
+  assert.deepStrictEqual(ins.syncGuide(home).changed, [claude]);
+  assert.match(fs.readFileSync(claude, "utf8"), /# Claude\n$/);
+
+  // Turned off: the section goes, the master instructions line comes back.
+  const off = ins.syncGuide(home, { on: false });
+  assert.strictEqual(off.on, false);
+  assert.deepStrictEqual(off.changed.sort(), [claude, codex].sort());
+  assert.strictEqual(fs.readFileSync(codex, "utf8"), ins.POINTER + "\r\n\r\n# Codex\r\nUse tabs.\r\n");
+  assert.strictEqual(fs.readFileSync(claude, "utf8"), ins.POINTER + "\n\n# Claude\n");
+});

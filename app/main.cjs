@@ -31,6 +31,14 @@ const SMOKE = argv.includes("--smoke");
 // --home works on a scratch home folder (tests and smoke runs).
 const HOME = flag("--home") || process.env.JMCP_TEST_HOME || undefined;
 
+// What the JMCP agent guide tells an agent to run to connect JMCP: this
+// app's command line, when Node is on the PATH to run it.
+function guideConnect() {
+  const cli = path.join(__dirname, "..", "cli", "jmcp.cjs");
+  const node = catalog.nodeCommand();
+  return fs.existsSync(cli) && !Object.keys(node.env).length ? { cli } : null;
+}
+
 app.setName("JMCP");
 if (SMOKE) app.disableHardwareAcceleration();
 // --theme dark|light forces a theme (smoke runs check both).
@@ -133,6 +141,8 @@ handle("instructions-trash", () => instructions.trash(HOME));
 handle("instructions-trash-text", (id) => instructions.trashText(HOME, String(id)));
 handle("instructions-restore", (id) => instructions.restore(HOME, String(id)));
 handle("instructions-forget", (id) => instructions.forget(HOME, String(id)));
+handle("instructions-guide", () => ({ on: instructions.guideOn(HOME), text: instructions.guideText({ id: "claude-code", agent: "Claude Code" }, guideConnect()) }));
+handle("instructions-set-guide", (on) => instructions.syncGuide(HOME, { on: Boolean(on), connect: guideConnect() }));
 handle("pick-folder", async () => {
   const r = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow(), { properties: ["openDirectory"] });
   return r.canceled ? "" : r.filePaths[0] || "";
@@ -249,11 +259,12 @@ async function smoke(win) {
 app.whenReady().then(() => {
   // Bring installed JMCP servers up to this version before the window asks.
   startupUpdates = catalog.updateAll(HOME).catch((e) => [{ ok: false, server: "jmcp", error: String(e.message || e) }]);
-  // Each agent file gets, or loses, the master instructions line.
+  // Each agent file gets, or loses, the JMCP agent guide and the master
+  // instructions line.
   try {
-    instructions.syncPointers(HOME);
+    instructions.syncGuide(HOME, { connect: guideConnect() });
   } catch (e) {
-    process.stderr.write("master instructions line: " + (e.message || e) + "\n");
+    process.stderr.write("agent guide: " + (e.message || e) + "\n");
   }
   startUpdater();
   const win = createWindow();

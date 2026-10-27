@@ -21,6 +21,16 @@ at every agent session start if it went missing. Deleting the master
 instructions takes the line out again. Files are changed in place, so linked
 files stay linked, and the old version goes to the trash first.
 
+The **JMCP agent guide** is a section the Instructions page offers to add at
+the top of the same files. It is off until you turn it on. It tells the agent
+to call `master_instructions`, follow jmcp-rules, use jmcp-skills and
+jmcp-memory, and, when no jmcp- tools are in its session, to say so and offer
+to connect JMCP (with the `jmcp install` commands for that agent when Node is
+on the PATH, or the JMCP servers page otherwise). It sits between
+`<!-- JMCP agent guide ... -->` and `<!-- end of JMCP agent guide -->` and
+takes the place of the master instructions line. The app rewrites it at start
+when it changed or went missing, and taking it out brings the line back.
+
 Tools:
 
 - `master_instructions`: the current master instructions, in full, with the

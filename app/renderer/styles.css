@@ -365,6 +365,9 @@ textarea.lib-input.mono { font-size: 12.5px; line-height: 1.55; }
 .ins-editor-head .row-actions { flex: none; flex-wrap: nowrap; }
 .ins-title .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
 .ins-text { width: 100%; height: max(380px, calc(100vh - 330px)); padding: 14px 16px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--canvas); font-family: var(--mono); font-size: 13px; line-height: 1.6; tab-size: 2; resize: vertical; }
+.ins-guide { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; }
+.ins-guide-text { max-width: 90ch; margin: 4px 0 0; color: var(--muted); }
+.ins-guide pre { font-variant-ligatures: none; }
 .ins-status.warn { color: var(--warn); font-weight: 500; }
 .disclose { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 0; border: 0; background: none; text-align: left; cursor: pointer; }
 .disclose svg { flex: none; color: var(--muted); }
