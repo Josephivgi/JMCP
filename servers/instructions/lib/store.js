@@ -572,7 +572,7 @@ function guideText(a, connect) {
     "- jmcp-memory: memory shared by all of the user's agents. Search it before work that may depend on the user's preferences or past decisions, and save what a future session should know.",
     "- jmcp-subagents, jmcp-health and jmcp-browser, when installed: other coding agents as subagents, health checks of this computer, and a hidden browser.",
     "",
-    "Some agents load MCP servers a few seconds after the session starts, so look for the jmcp- tools again before deciding they are missing. If they are still missing, JMCP is not connected in this session. Say so at the start of your reply and offer to connect it." +
+    "Some agents load MCP servers a few seconds after the session starts, so look for the jmcp- tools again before deciding they are missing. If you are a subagent started through JMCP, you run without them on purpose; skip this. Otherwise, if they are still missing, JMCP is not connected in this session. Say so at the start of your reply and offer to connect it." +
       (connect && connect.cli ? " With the user's OK, run:" : " The user connects it in the JMCP app: open JMCP servers and install jmcp-instructions, jmcp-rules, jmcp-skills and jmcp-memory for " + a.agent + "."),
   ];
   if (connect && connect.cli) {

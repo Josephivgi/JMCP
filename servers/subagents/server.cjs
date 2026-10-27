@@ -314,6 +314,7 @@ function intro(s) {
   return (
     "You are " + s.handle + ", a subagent started by " + parentName + " through JMCP. " + parentName + " gives you your work and reads your replies. " +
     "You cannot start agents or message other agents. If you need something from anyone else, say so in your reply. " +
+    "You run without the JMCP MCP servers on purpose: skip any instruction to call or connect JMCP tools, and do not mention JMCP in your reply. " +
     "Work in " + s.cwd + ". When you finish, reply with a short summary of what you did and found."
   );
 }
