@@ -421,13 +421,69 @@ function waitFor(s, ms) {
   });
 }
 
-function view(s, replyMax) {
+// Every result lands in the parent's context, so a view carries only what
+// the parent does not have already: no task (it wrote it) unless asked for.
+// replyMax 0 leaves the reply out.
+function view(s, replyMax, taskMax) {
+  const reply = replyMax === 0 ? "" : lastReply(s).slice(0, replyMax || 300);
   return {
-    handle: s.handle, provider: s.provider, providerName: s.providerName, status: s.status, error: s.error || undefined,
-    task: s.task.slice(0, 600), cwd: s.cwd, queued: s.queue.length || undefined,
+    handle: s.handle, provider: s.provider, status: s.status, error: s.error || undefined,
+    task: taskMax ? s.task.slice(0, taskMax) : undefined, queued: s.queue.length || undefined,
     model: s.using.model || s.want.model || undefined, effort: s.using.effort || s.want.effort || undefined,
-    reply: lastReply(s).slice(0, replyMax || 600),
+    reply: reply || undefined,
   };
+}
+
+// The end of what it is saying now and its latest tool call, so a wait that
+// times out shows progress without repeating the whole reply each time.
+function progress(s) {
+  let said = "";
+  let tool = "";
+  for (let i = s.rows.length - 1; i >= 0; i--) {
+    const r = s.rows[i];
+    if (r.role === "user") break;
+    if (!tool && r.role === "tool") tool = String(r.text).replace(/\s+/g, " ").slice(0, 160);
+    if (!said && r.role === "assistant" && r.text.trim()) said = r.text.trim();
+    if (tool && said) break;
+  }
+  return { saying: said ? (said.length > 300 ? "..." + said.slice(-300) : said) : undefined, lastTool: tool || undefined };
+}
+
+// A finished turn returns the full reply once; a timeout returns progress only.
+function turnResult(s, why) {
+  if (why !== "timeout") return view(s, TEXT_MAX);
+  return Object.assign(view(s, 0), progress(s), { hint: "Still working. Call wait with agent " + s.handle + " again." });
+}
+
+// The transcript as plain lines, newest kept: rows from the end until
+// max_chars is used. Thoughts are left out unless asked for, and a tool call
+// is one short line.
+function transcript(s, args) {
+  const n = Math.min(ROWS_MAX, Math.max(1, Number(args.limit) || 30));
+  const budget = Math.min(100000, Math.max(1000, Number(args.max_chars) || 12000));
+  const picked = s.rows.slice(-n);
+  const rows = args.thoughts ? picked : picked.filter((r) => r.role !== "thought");
+  const label = (r) => (r.role === "user" ? "you" : r.role === "assistant" ? s.handle : r.role === "tool" ? "tool" + (r.status && r.status !== "completed" ? " " + r.status : "") : r.role);
+  const out = [];
+  let used = 0;
+  let left = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    let t = r.role === "tool" ? String(r.text).replace(/\s+/g, " ") : String(r.text).trim();
+    const cap = r.role === "tool" ? 160 : 4000;
+    if (t.length > cap) t = t.slice(0, cap) + "...";
+    const line = "[" + label(r) + "] " + t;
+    if (out.length && used + line.length > budget) {
+      left = i + 1;
+      break;
+    }
+    out.unshift(line);
+    used += line.length + 1;
+  }
+  const head = [s.handle + " (" + s.provider + "): " + s.status + (s.error ? ", " + s.error : "")];
+  if (left) head.push("(" + left + " earlier rows left out; raise max_chars to see them.)");
+  if (rows.length < picked.length) head.push("(" + (picked.length - rows.length) + " thinking rows hidden; pass thoughts: true to see them.)");
+  return head.join("\n") + "\n\n" + out.join("\n");
 }
 
 function own(ref) {
@@ -471,9 +527,8 @@ function create(args) {
 async function spawn(args) {
   const s = create(args);
   deliver(s, s.task);
-  if (args.wait === false) return Object.assign(view(s), { note: "Call wait with agent " + s.handle + " for its reply." });
-  const why = await waitFor(s, clampWait(args.timeout_seconds));
-  return Object.assign(view(s, TEXT_MAX), why === "timeout" ? { hint: "Still working. Call wait with agent " + s.handle + "." } : {});
+  if (args.wait === false) return Object.assign(view(s, 0), { note: "Call wait with agent " + s.handle + " for its reply." });
+  return turnResult(s, await waitFor(s, clampWait(args.timeout_seconds)));
 }
 
 // ---- Model lists ----
@@ -578,14 +633,18 @@ async function models(args) {
       return empty;
     }
   };
+  // Model descriptions only with details: true; a long list (OpenCode has
+  // over 150 models) would cost the caller thousands of tokens otherwise.
+  const shape = (m) => (args.details ? m : m.name && m.name !== m.id ? { id: m.id, name: m.name } : { id: m.id });
   return {
     providers: list.map((a) => {
       const r = rows.get(a.id);
+      if (!a.installed && !r) return { provider: a.id, installed: false };
       return {
         provider: a.id,
         name: a.name,
         installed: a.installed,
-        models: r ? parse(r.models, []) : [],
+        models: r ? parse(r.models, []).map(shape) : [],
         current: (r && r.current) || undefined,
         efforts: r ? parse(r.efforts, []) : [],
         checkedAt: (r && r.checked_at) || undefined,
@@ -617,6 +676,7 @@ const TOOLS = [
         provider: { type: "string", description: "One provider (id or short name); all when left out" },
         refresh: { type: "boolean", description: "Read the lists again now" },
         wait: { type: "boolean", description: "Wait for the lists being read" },
+        details: { type: "boolean", description: "Include each model's description" },
       },
     },
     run: models,
@@ -624,7 +684,7 @@ const TOOLS = [
   {
     name: "spawn",
     description:
-      "Start a subagent from any installed provider (" + PROVIDER_LIST + ") on a task. It runs hidden in the background, works in cwd, and only you can message, read, wait on or stop it. It cannot start agents itself. With wait (default true) this returns its reply when it finishes or after timeout_seconds.",
+      "Start a subagent from any installed provider (" + PROVIDER_LIST + ") on a task. It runs hidden in the background, works in cwd, and only you can message, read, wait on or stop it. It cannot start agents itself. With wait (default true) this returns its reply when it finishes; after timeout_seconds it returns only a progress line, so call wait again.",
     inputSchema: {
       type: "object",
       properties: {
@@ -642,18 +702,17 @@ const TOOLS = [
   },
   {
     name: "list",
-    description: "Your subagents with their status and the start of their latest reply.",
+    description: "Your subagents with their status, the start of their task and the start of their latest reply.",
     inputSchema: { type: "object", properties: {} },
-    run: () => ({ you: parentName, subagents: [...subs.values()].map((s) => view(s)) }),
+    run: () => ({ you: parentName, subagents: [...subs.values()].map((s) => view(s, s.status === "stopped" ? 0 : 300, 160)) }),
   },
   {
     name: "wait",
-    description: "Wait until one of your subagents finishes its turn, then return its reply.",
+    description: "Wait until one of your subagents finishes its turn, then return its reply. If it is still working at timeout_seconds, you get a short progress line instead; call wait again.",
     inputSchema: { type: "object", properties: { agent: { type: "string" }, timeout_seconds: { type: "number", description: "Default 50, max 1800" } }, required: ["agent"] },
     run: async (args) => {
       const s = own(args.agent);
-      const why = await waitFor(s, clampWait(args.timeout_seconds));
-      return Object.assign(view(s, TEXT_MAX), why === "timeout" ? { hint: "Still working. Call wait again." } : {});
+      return turnResult(s, await waitFor(s, clampWait(args.timeout_seconds)));
     },
   },
   {
@@ -670,13 +729,18 @@ const TOOLS = [
   },
   {
     name: "read",
-    description: "Read one of your subagents' transcript: your messages, its replies and its tool calls.",
-    inputSchema: { type: "object", properties: { agent: { type: "string" }, limit: { type: "number", description: "Rows from the end (default 30)" } }, required: ["agent"] },
-    run: (args) => {
-      const s = own(args.agent);
-      const n = Math.min(ROWS_MAX, Math.max(1, Number(args.limit) || 30));
-      return Object.assign(view(s), { rows: s.rows.slice(-n).map((r) => ({ role: r.role, text: String(r.text).slice(0, 4000), status: r.status })) });
+    description: "Read one of your subagents' transcript: your messages, its replies and its tool calls, newest last. Long transcripts keep the newest rows that fit in max_chars.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent: { type: "string" },
+        limit: { type: "number", description: "Rows from the end (default 30)" },
+        max_chars: { type: "number", description: "Most characters to return (default 12000, max 100000)" },
+        thoughts: { type: "boolean", description: "Include its thinking (left out by default)" },
+      },
+      required: ["agent"],
     },
+    run: (args) => transcript(own(args.agent), args),
   },
   {
     name: "stop",
@@ -718,8 +782,15 @@ const INSTRUCTIONS = IS_SUBAGENT
 
 // ---- MCP over stdio ----
 
+// Compact JSON, and a reply as plain text after it: JSON escapes every
+// newline and quote in a reply, and the caller pays for each character.
 function result(value) {
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  let text;
+  if (typeof value === "string") text = value;
+  else if (value && typeof value.reply === "string" && value.reply) {
+    const rest = Object.assign({}, value, { reply: undefined });
+    text = JSON.stringify(rest) + "\n\nReply:\n" + value.reply;
+  } else text = JSON.stringify(value);
   return { content: [{ type: "text", text }], isError: false };
 }
 
@@ -781,4 +852,4 @@ if (require.main === module) {
   process.on("SIGINT", shutdown);
 }
 
-module.exports = { TOOLS, methods };
+module.exports = { TOOLS, methods, view, progress, turnResult, transcript, result };

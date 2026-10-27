@@ -135,3 +135,23 @@ test("rules are short, and the text agents get is bounded", () => {
   assert.ok(text.length < 41000, "length " + text.length);
   assert.match(text, /were cut at 40000/);
 });
+
+test("long rules that have not changed come back as one line until full is asked", async () => {
+  const home = scratch();
+  const dataDir = path.join(home, ".jmcp");
+  for (let i = 0; i < 10; i++) rules.add(home, { kind: "do", text: "Rule number " + i + " says to keep this rule in mind while working." });
+  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: dataDir } });
+  try {
+    await c.initialize("test");
+    const first = await c.callTool("rules");
+    assert.match(first.text, /Rule number 9/);
+    const again = await c.callTool("rules");
+    assert.match(again.text, /have not changed since you last called/);
+    assert.doesNotMatch(again.text, /Rule number/);
+    assert.match((await c.callTool("rules", { full: true })).text, /Rule number 9/);
+    rules.add(home, { kind: "dont", text: "Push on Fridays" });
+    assert.match((await c.callTool("rules")).text, /Push on Fridays/);
+  } finally {
+    await c.close();
+  }
+});

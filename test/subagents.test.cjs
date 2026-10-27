@@ -123,3 +123,120 @@ test("killTree resolves after the process tree is gone", async () => {
   await exited;
   assert.ok(child.exitCode != null || child.signalCode != null);
 });
+
+// ---- What results cost the parent's context ----
+
+const sub = (rows, extra) =>
+  Object.assign({ handle: "claude-1", provider: "claude-code", providerName: "Claude Code", task: "T".repeat(5000), cwd: "C:/x", status: "ready", error: "", queue: [], using: {}, want: {}, rows }, extra);
+
+test("a finished wait returns the whole reply once, as plain text after the JSON", () => {
+  const { turnResult, result } = require(SERVER);
+  const reply = 'Line one\nLine "two"\n' + "x".repeat(3000);
+  const r = turnResult(sub([{ role: "user", text: "go" }, { role: "assistant", text: reply }]), "done");
+  assert.strictEqual(r.reply, reply);
+  assert.strictEqual(r.task, undefined);
+  const text = result(r).content[0].text;
+  // No escaped newlines or quotes, no indentation.
+  assert.ok(text.endsWith("\n\nReply:\n" + reply));
+  assert.doesNotMatch(text, /\n {2}"/);
+});
+
+test("a wait that times out returns progress, not the reply so far", () => {
+  const { turnResult, result } = require(SERVER);
+  const long = "y".repeat(15000) + "END";
+  const s = sub([{ role: "user", text: "go" }, { role: "assistant", text: long }, { role: "tool", text: "Read   C:/big/file.txt", status: "in_progress" }], { status: "busy" });
+  const r = turnResult(s, "timeout");
+  assert.strictEqual(r.reply, undefined);
+  assert.ok(r.saying.length <= 303 && r.saying.endsWith("END"));
+  assert.strictEqual(r.lastTool, "Read C:/big/file.txt");
+  assert.match(r.hint, /Call wait/);
+  assert.ok(result(r).content[0].text.length < 600);
+});
+
+test("read keeps the newest rows that fit, hides thinking and shortens tool rows", () => {
+  const { transcript } = require(SERVER);
+  const rows = [{ role: "user", text: "first task" }];
+  for (let i = 0; i < 40; i++) {
+    rows.push({ role: "thought", text: "thinking " + i + " " + "t".repeat(3000) });
+    rows.push({ role: "tool", text: "Bash " + "c".repeat(400), status: "completed" });
+    rows.push({ role: "assistant", text: "step " + i + " " + "a".repeat(1000) });
+  }
+  const s = sub(rows);
+  const out = transcript(s, { limit: 400 });
+  assert.ok(out.length <= 12000 + 400, String(out.length));
+  assert.doesNotMatch(out, /\] thinking \d/);
+  assert.match(out, /thinking rows hidden/);
+  assert.match(out, /earlier rows left out/);
+  assert.match(out, /step 39 a+$/);
+  assert.ok(out.split("\n").filter((l) => l.startsWith("[tool]")).every((l) => l.length <= 7 + 163));
+  const withThoughts = transcript(s, { limit: 3, thoughts: true, max_chars: 100000 });
+  assert.match(withThoughts, /\[thought\] thinking 39/);
+  // Small transcripts come back whole.
+  const small = transcript(sub([{ role: "user", text: "hi" }, { role: "assistant", text: "hello" }]), {});
+  assert.strictEqual(small, "claude-1 (claude-code): ready\n\n[you] hi\n[claude-1] hello");
+});
+
+test("list shows the start of each task; stopped ones carry no reply", () => {
+  const { view } = require(SERVER);
+  const rows = [{ role: "user", text: "go" }, { role: "assistant", text: "r".repeat(2000) }];
+  const live = view(sub(rows), 300, 160);
+  assert.strictEqual(live.task.length, 160);
+  assert.strictEqual(live.reply.length, 300);
+  const stopped = view(sub(rows, { status: "stopped" }), 0, 160);
+  assert.strictEqual(stopped.reply, undefined);
+});
+
+test("the MCP client reads a reply sent after the JSON", async () => {
+  const { connect } = require("../core/mcp-client.cjs");
+  const script = path.join(home(), "fake.cjs");
+  // A tiny stdio server that answers every tools/call with the reply format.
+  const fake = () => {
+    process.stdin.on("data", (d) => {
+      for (const line of String(d).split("\n").filter(Boolean)) {
+        const m = JSON.parse(line);
+        if (m.id == null) continue;
+        const result = m.method === "tools/call" ? { content: [{ type: "text", text: JSON.stringify({ handle: "a-1", status: "ready" }) + "\n\nReply:\nhi\nthere" }] } : { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "x" } };
+        process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }) + "\n");
+      }
+    });
+  };
+  fs.writeFileSync(script, "(" + fake.toString() + ")();");
+  const c = connect(process.execPath, [script]);
+  await c.initialize("test");
+  const r = await c.callTool("wait", { agent: "a-1" });
+  assert.deepStrictEqual(r.json, { handle: "a-1", status: "ready", reply: "hi\nthere" });
+  await c.close();
+});
+
+test("models leaves out descriptions unless details is true", async () => {
+  const dir = home();
+  const { DatabaseSync } = require("node:sqlite");
+  const db = new DatabaseSync(path.join(dir, "subagents.db"));
+  db.exec("CREATE TABLE models (provider TEXT PRIMARY KEY, models TEXT, current TEXT, efforts TEXT, error TEXT, checked_at INTEGER)");
+  const kept = [{ id: "opus", name: "Opus", description: "Most capable" }, { id: "sonnet", name: "sonnet" }];
+  db.prepare("INSERT INTO models VALUES (?,?,?,?,?,?)").run("claude-code", JSON.stringify(kept), "opus", "[]", "", Date.now());
+  db.close();
+  const c = connect(process.execPath, [SERVER], { env: { JMCP_HOME: dir, JMCP_SUBAGENT: "" } });
+  await c.initialize("test");
+  const short = JSON.parse((await c.callTool("models", { provider: "claude" })).text);
+  assert.deepStrictEqual(short.providers[0].models, [{ id: "opus", name: "Opus" }, { id: "sonnet" }]);
+  const full = JSON.parse((await c.callTool("models", { provider: "claude", details: true })).text);
+  assert.deepStrictEqual(full.providers[0].models, kept);
+  await c.close();
+});
+
+test("terminal output keeps at most the asked or default tail", async () => {
+  const { AcpClient } = require("../servers/subagents/lib/acp-client.js");
+  const c = new AcpClient({ cwd: os.tmpdir() });
+  const big = c._createTerminal({ command: process.execPath, args: ["-e", "process.stdout.write('z'.repeat(200000) + 'TAIL')"] }).terminalId;
+  await c._waitTerminal({ terminalId: big });
+  const out = c._terminalOutput({ terminalId: big });
+  assert.strictEqual(out.output.length, 64 * 1024);
+  assert.ok(out.output.endsWith("TAIL") && out.truncated);
+  const small = c._createTerminal({ command: process.execPath, args: ["-e", "process.stdout.write('q'.repeat(5000) + 'END')"], outputByteLimit: 1000 }).terminalId;
+  await c._waitTerminal({ terminalId: small });
+  const o2 = c._terminalOutput({ terminalId: small });
+  assert.strictEqual(o2.output.length, 1000);
+  assert.ok(o2.output.endsWith("END") && o2.truncated);
+  await c.stop();
+});

@@ -68,13 +68,15 @@ const methods = {
   initialize(params) {
     const asked = params.protocolVersion;
     const all = store.active();
+    // Every session loads this list, so descriptions are cut shorter here
+    // than in skills_list.
     return {
       protocolVersion: PROTOCOLS.includes(asked) ? asked : PROTOCOLS[0],
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: "jmcp-skills", title: "JMCP Skills", version: VERSION },
       instructions:
         "The user's skills, managed in JMCP. When a task matches a skill's description, load it with skill_read before starting and follow it. When the user asks for a new skill, save it with skill_save." +
-        (all.length ? "\n\nSkills:\n" + store.index(all, 60) : "\n\nNo skills are turned on yet."),
+        (all.length ? "\n\nSkills:\n" + store.index(all, 60, 200) : "\n\nNo skills are turned on yet."),
     };
   },
   ping: () => ({}),

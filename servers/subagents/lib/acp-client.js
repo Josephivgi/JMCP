@@ -8,8 +8,10 @@ const { spawn } = require("child_process");
 const { spawnHidden, killTree, watch } = require("./win-command");
 
 // Kept output per terminal: enough for the agent to read results, bounded so
-// a runaway child cannot grow memory without bound.
-const TERMINAL_OUTPUT_MAX = 256 * 1024;
+// a runaway child cannot grow memory without bound. The agent reads all of it
+// on every terminal/output poll, so it is kept to about 16k tokens; an agent
+// that asks for less with outputByteLimit gets less.
+const TERMINAL_OUTPUT_MAX = 64 * 1024;
 
 // Renderer fan-out for terminal chunks is throttled: a spewy child must not
 // flood the IPC channel with a snapshot per write.
@@ -264,6 +266,8 @@ class AcpClient {
         if (existing.finish) existing.finish(existing.exitCode, existing.signal);
         this.termProcs.delete(id);
       }
+      const asked = Number(params && params.outputByteLimit);
+      const keep = asked > 0 ? Math.min(TERMINAL_OUTPUT_MAX, asked) : TERMINAL_OUTPUT_MAX;
       const rec = { child: null, exitCode: null, signal: null, output: "", truncated: false, done: null, finish: null, flushTimer: null, flushPending: false };
       rec.done = new Promise((resolve) => {
         rec.finish = (code, signal) => {
@@ -298,8 +302,8 @@ class AcpClient {
         // window so a runaway child cannot grow memory without bound.
         const text = chunk.toString("utf8");
         const next = rec.output + text;
-        if (next.length > TERMINAL_OUTPUT_MAX) rec.truncated = true;
-        rec.output = next.slice(-TERMINAL_OUTPUT_MAX);
+        if (next.length > keep) rec.truncated = true;
+        rec.output = next.slice(-keep);
         rec.flushPending = true;
         if (!rec.flushTimer) rec.flushTimer = setTimeout(flush, TERMINAL_FLUSH_MS);
       };

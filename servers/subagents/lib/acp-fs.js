@@ -8,7 +8,9 @@ function resolveSafe(cwd, filePath) {
   return resolved;
 }
 
-const READ_MAX = 4 * 1024 * 1024;
+// A read goes straight into the agent's context: 256 KB is about 64k tokens.
+// Bigger files are read in parts with line and limit.
+const READ_MAX = 256 * 1024;
 const WRITE_MAX = 4 * 1024 * 1024;
 
 // Async with a size cap: a sync read of a FIFO or a huge file would block
@@ -20,7 +22,7 @@ async function readTextFile(params, cwd) {
   const line = params && typeof params.line === "number" && params.line >= 0 ? Math.floor(params.line) : null;
   const limit = params && typeof params.limit === "number" && params.limit >= 0 ? Math.floor(params.limit) : null;
   if (line == null && limit == null) {
-    if (stat.size > READ_MAX) throw new Error("file is too large to read");
+    if (stat.size > READ_MAX) throw new Error("file is too large to read whole (" + Math.round(stat.size / 1024) + " KB); read it in parts with line and limit");
     return { content: await fs.promises.readFile(file, "utf8") };
   }
   // ACP counts lines 1-based; return [line, line + limit). A paged read of a

@@ -17,12 +17,16 @@ const pathProp = { type: "string", description: "Absolute path to the file. The 
 // Server instructions stay short enough for every agent to take them; the
 // master_instructions tool always returns the whole text.
 const INLINE_MAX = 32 * 1024;
+// Master text this short is always sent whole; the "unchanged" note would
+// be about as long.
+const SHORT = 400;
+let lastMaster = null;
 
 const TOOLS = [
   {
     name: "master_instructions",
     description: "The user's MASTER INSTRUCTIONS. You must call this tool before your first reply in every session, and again at the start of each new task, then follow what it returns in everything you do. It is read-only and fast. Some agents never show server instructions, so this tool is how they reach you.",
-    inputSchema: { type: "object", properties: {} },
+    inputSchema: { type: "object", properties: { full: { type: "boolean", description: "Return the text even if it has not changed since your last call" } } },
     annotations: { readOnlyHint: true },
   },
   {
@@ -99,7 +103,14 @@ function call(name, a) {
   a = a || {};
   if (name === "master_instructions") {
     const text = store.master();
-    return text ? masterBlock(text) : "The user has not set master instructions yet.";
+    if (!text) return "The user has not set master instructions yet.";
+    // Agents call this at the start of every task. Long text that has not
+    // changed since the last call in this session comes back as one line.
+    if (a.full !== true && text.length > SHORT && text === lastMaster) {
+      return "The master instructions have not changed since you last called this tool in this session. Keep following them. If they are no longer in your context, call again with full: true.";
+    }
+    lastMaster = text;
+    return masterBlock(text);
   }
   if (name === "list") {
     const r = store.list(undefined, a.folder || undefined);
