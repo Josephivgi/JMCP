@@ -13,6 +13,8 @@
 //   jmcp memory list                  show memories agents share (jmcp-memory)
 //   jmcp skills list                  show the skills library (jmcp-skills)
 //   jmcp instructions list [folder]   instruction files (AGENTS.md, CLAUDE.md, ...)
+//   jmcp connections                  apps connected to JMCP (JAgents Terminal, ...)
+//   jmcp connect <app> | disconnect <app>
 // --home <dir> works on a scratch home folder instead of yours.
 
 const agents = require("../core/agents.cjs");
@@ -22,6 +24,7 @@ const memory = require("../core/memory.cjs");
 const skills = require("../core/skills.cjs");
 const instructions = require("../core/instructions.cjs");
 const { probe } = require("../core/mcp-client.cjs");
+const connections = require("../core/connections.cjs");
 
 const argv = process.argv.slice(2);
 let home = "";
@@ -83,6 +86,18 @@ async function main() {
     const list = skills.list(home || undefined);
     return out(list, () => list.map((s) => (s.enabled ? "" : "(off) ") + s.name + "  " + s.description.slice(0, 100)).join("\n") || "  (no skills)");
   }
+  if (cmd === "connections" && (!rest[0] || (rest[0] === "list" && rest.length === 1))) {
+    const list = connections.list(home || undefined);
+    return out(list, () => list.map((a) =>
+      a.name + "  " + (a.state === "connected" ? (a.pluginMissing ? "connected, but the JMCP plugin was removed in the app" : "connected") : a.state === "disconnected" ? "disconnected" : "not connected") + (a.present ? "" : " (not installed)") +
+      (a.lastSeen ? "\n    last seen " + new Date(a.lastSeen).toLocaleString() : "") + "\n    " + a.pluginDir,
+    ).join("\n"));
+  }
+  if (cmd === "connect" || cmd === "disconnect") {
+    if (!rest[0]) throw new Error("Usage: jmcp " + cmd + " <app>. Apps: " + connections.APPS.map((a) => a.id).join(", "));
+    const r = cmd === "connect" ? connections.connect(home || undefined, rest[0]) : connections.disconnect(home || undefined, rest[0]);
+    return out(r, () => "  ✓  " + r.name + " " + r.state + "  " + r.pluginDir);
+  }
   if (cmd === "install" || cmd === "uninstall") {
     if (!rest[0]) throw new Error("Usage: jmcp " + cmd + " <server> [agents...]");
     const r = cmd === "install" ? await catalog.installServer(rest[0], rest.slice(1), home || undefined, { force }) : catalog.uninstallServer(rest[0], rest.slice(1), home || undefined);
@@ -100,7 +115,7 @@ async function main() {
     const r = await probe(s);
     return out(r, () => (r.ok ? r.tools.map((t) => "  " + t.name).join("\n") || "  (no tools)" : "  ✗ " + r.error));
   }
-  console.log("Usage: jmcp list | catalog | rules list | memory list | skills list | instructions list [folder] | install <server> [agents..] | uninstall <server> [agents..] | update [server] | probe <agent> <server>  [--home dir] [--json]");
+  console.log("Usage: jmcp list | catalog | rules list | memory list | skills list | instructions list [folder] | connections | connect <app> | disconnect <app> | install <server> [agents..] | uninstall <server> [agents..] | update [server] | probe <agent> <server>  [--home dir] [--json]");
 }
 
 main().catch((e) => {

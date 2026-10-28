@@ -623,3 +623,12 @@ pre.lib-body { margin: 0; font-size: 12.5px; }
 .br-control .lib-input { max-width: 560px; }
 .br-top { padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .br-top .br-control { margin-top: 0; }
+
+/* Connections page */
+.conn-list { display: flex; flex-direction: column; gap: 14px; max-width: 900px; }
+.conn-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.conn-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.conn-desc { color: var(--muted); font-size: 13px; }
+.conn-can { display: flex; flex-direction: column; gap: 6px; }
+.conn-path { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-ask { flex-direction: row; align-items: center; justify-content: space-between; gap: 12px; }

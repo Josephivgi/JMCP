@@ -96,6 +96,28 @@ login it hands the browser to you: take control on the Browsers page, click
 and type in the live page, then hand it back. Browsers close when the agent's
 session ends. See [servers/browser](servers/browser/README.md).
 
+## Connections
+
+Other apps can use JMCP too. The Connections page lists them, with Connect
+and Disconnect buttons. JAgents Terminal is the first one, and it connects by
+itself the first time JMCP starts and finds it. If you disconnect it, it stays
+disconnected until you connect it again.
+
+Connecting JAgents Terminal adds a JMCP plugin to it (in
+`%APPDATA%\JAgents-Terminal\plugins\jmcp`). The running window loads it
+without a restart. Its Plugins menu (Ctrl+B e) then has:
+
+- **JMCP: subagents**: subagents started through jmcp-subagents, and which are working.
+- **JMCP: subagent providers**, **rules**, **skills** and **memories**.
+- **JMCP: status**: the JMCP servers installed on this computer.
+- **JMCP: open view in a new tab**: a JMCP tab that shows servers and subagents and refreshes every 3 seconds. Your other panes are left alone.
+
+New Claude Code and Codex panes also get a `jmcp` MCP server with `status`,
+`subagents`, `tools` and `call` (call any tool of an installed JMCP server).
+
+From a terminal: `jmcp connections`, `jmcp connect jagents-terminal`,
+`jmcp disconnect jagents-terminal`.
+
 ## Install and update
 
 Download `JMCP-Setup-<version>.exe` from

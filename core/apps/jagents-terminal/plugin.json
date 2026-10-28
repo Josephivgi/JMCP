@@ -1,0 +1,5 @@
+{
+  "name": "JMCP",
+  "version": "1.0.0",
+  "description": "Connects this window to JMCP: list subagents, open a JMCP view, and call JMCP servers from the Plugins menu or the jmcp MCP tools."
+}

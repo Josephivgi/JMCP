@@ -40,6 +40,7 @@ const PAGES = [
   { id: "memory", label: "Memory", icon: "M5 3h10v14l-5-4-5 4z" },
   { id: "skills", label: "Skills", icon: "M11 2 4 11h5l-1 7 7-9h-5z" },
   { id: "health", label: "Health", icon: "M10 17s-7-4.3-7-9a3.8 3.8 0 0 1 7-2 3.8 3.8 0 0 1 7 2c0 4.7-7 9-7 9z" },
+  { id: "connections", label: "Connections", icon: "M7 4v4M13 4v4M5 8h10v3a5 5 0 0 1-10 0zM10 16v2" },
   { id: "browsers", label: "Browsers", icon: "M2 4h16v12H2zM2 7.5h16M5 5.8h.5M7.5 5.8h.5" },
   { id: "activity", label: "Activity", icon: "M2 10h4l2-5 4 10 2-5h4" },
 ];
@@ -1186,7 +1187,7 @@ function render() {
   const end = focusKey && typeof active.selectionEnd === "number" ? active.selectionEnd : null;
   const scroll = $main.scrollTop;
   renderSide();
-  const view = page === "rules" ? rulesPage() : page === "instructions" ? instructionsPage() : page === "memory" ? memoryPage() : page === "skills" ? skillsPage() : page === "activity" ? activityPage() : page === "health" ? healthPage() : page === "browsers" ? browsersPage() : page.startsWith("agent:") ? agentPage(page.slice(6)) : catalogPage();
+  const view = page === "rules" ? rulesPage() : page === "instructions" ? instructionsPage() : page === "memory" ? memoryPage() : page === "skills" ? skillsPage() : page === "activity" ? activityPage() : page === "health" ? healthPage() : page === "browsers" ? browsersPage() : page === "connections" ? connectionsPage() : page.startsWith("agent:") ? agentPage(page.slice(6)) : catalogPage();
   $main.replaceChildren(view);
   if (focusKey) {
     const next = [...document.querySelectorAll("[data-focus-key]")].find((x) => x.dataset.focusKey === focusKey);

@@ -19,6 +19,7 @@ const health = require("../core/health.cjs");
 const instructions = require("../core/instructions.cjs");
 const { activity } = require("../core/activity.cjs");
 const browser = require("../core/browser.cjs");
+const connections = require("../core/connections.cjs");
 const { probe } = require("../core/mcp-client.cjs");
 const { createUpdater, RELEASES_URL } = require("./updater.cjs");
 
@@ -126,6 +127,11 @@ handle("browser-close", (id) => browser.close(HOME, String(id)));
 handle("browser-control", (id) => browser.takeControl(HOME, String(id)));
 handle("browser-hand-back", (id, note) => browser.handBack(HOME, String(id), typeof note === "string" ? note : ""));
 handle("browser-input", (id, ev) => browser.input(HOME, String(id), ev));
+// Connections page: other apps JMCP works with (JAgents Terminal first).
+let startupConnections = [];
+handle("connections-list", () => ({ apps: connections.list(HOME), atStart: startupConnections }));
+handle("connections-connect", (id) => connections.connect(HOME, String(id)));
+handle("connections-disconnect", (id) => connections.disconnect(HOME, String(id)));
 handle("skills-import", (files) => {
   const offered = new Set(skills.importable(HOME).map((x) => x.file));
   return skills.importFiles(HOME, (Array.isArray(files) ? files : []).map(String).filter((f) => offered.has(f)));
@@ -265,6 +271,12 @@ app.whenReady().then(() => {
     instructions.syncGuide(HOME, { connect: guideConnect() });
   } catch (e) {
     process.stderr.write("agent guide: " + (e.message || e) + "\n");
+  }
+  // JAgents Terminal connects by itself the first time JMCP sees it.
+  try {
+    startupConnections = connections.sync(HOME);
+  } catch (e) {
+    startupConnections = [{ ok: false, app: "connections", error: String(e.message || e) }];
   }
   startUpdater();
   const win = createWindow();
